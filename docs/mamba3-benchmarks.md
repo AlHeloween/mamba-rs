@@ -1,0 +1,68 @@
+# Mamba-3 SISO Benchmarks
+
+Hardware: Ada server — Intel Xeon (48 threads) + NVIDIA RTX 6000 Ada (48GB), CUDA 13.2, Driver 595.
+
+## GPU Inference (T=1 step, default config: d_model=128, 4 layers, nheads=16, headdim=16)
+
+| Batch | No Graph | CUDA Graph |
+|-------|----------|------------|
+| B=1   | 138 us   | **86 us**  |
+| B=4   | 153 us   | 102 us     |
+| B=16  | 158 us   | 108 us     |
+| B=64  | 167 us   | 123 us     |
+
+CUDA Graph eliminates kernel launch overhead (~52 us saved per step).
+
+## GPU Training (default config, B=1, T=32)
+
+| | Time |
+|---|---|
+| Forward | 635 us |
+| Backward | 1,534 us |
+| Forward + Backward | 2,169 us |
+
+## CPU Inference (T=1 step, B=1)
+
+| Config | d_model | layers | nheads | us/step |
+|--------|---------|--------|--------|---------|
+| small  | 64      | 2      | 16     | 12.2    |
+| default| 128     | 4      | 16     | 64.8    |
+| medium | 256     | 4      | 32     | 270     |
+| large  | 512     | 6      | 64     | 2,249   |
+
+## CPU Training (B=1, T=32, per layer)
+
+| Config | d_model | layers | Forward | Backward | Total |
+|--------|---------|--------|---------|----------|-------|
+| small  | 64      | 2      | 205 us  | 810 us   | 1,015 us |
+| default| 128     | 4      | 525 us  | 3,085 us | 3,609 us |
+| medium | 256     | 4      | 1,649 us | 11,218 us | 12,866 us |
+| large  | 512     | 6      | 7,234 us | 60,011 us | 67,244 us |
+
+## Mamba-3 vs Mamba-1 Comparison (default config)
+
+| | Mamba-3 | Mamba-1 | Notes |
+|---|---|---|---|
+| CPU Inference B=1 | **64.8 us** | 83.6 us | M3 faster (no conv1d, BLAS matvec) |
+| GPU Inference B=1 (Graph) | 86 us | 79 us | Similar (M3 has 4L vs M1 3L) |
+| GPU Training Fwd+Bwd | 2,169 us | 1,640 us | M3 slower (4L vs 3L, RoPE, BCNorm) |
+| CPU Training Fwd+Bwd | 3,609 us | 15,874 us | M3 **4.4x faster** (no conv1d) |
+
+## Key Differences from Mamba-1
+
+- No conv1d — removed entirely (simpler, faster CPU training)
+- Input-dependent A matrix (per-head, clamped via a_floor)
+- Trapezoidal integration (alpha/beta/gamma with learned lambda)
+- RoPE per-head angle accumulation in [0, 2pi)
+- Multi-head B/C with per-group BCNorm
+- 4 persistent states (SSM + K + V + angle) vs 2 (conv + SSM)
+- 47 CUDA kernels across 5 .cu files
+
+## Optimizations
+
+- SIMD SSM recurrence via pulp (CPU inference + training)
+- BLAS matvec for in_proj/out_proj (CPU inference)
+- CUDA Graph capture for GPU inference (~1.6x speedup)
+- Flat weight buffer + WeightSlice for CUDA Graph safety
+- Zero heap allocations per inference step
+- `disable_event_tracking()` for CUDA Graph capture stability
