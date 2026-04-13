@@ -308,22 +308,21 @@ extern "C" __global__ void angle_dt_fwd(
     int h = idx / n_angles;
     int a = idx % n_angles;
 
-    float state = angle_state[h * n_angles + a];
+    double state = (double)angle_state[h * n_angles + a];
+    const double TWO_PI_64 = 6.283185307179586;
 
     for (int t = 0; t < T; t++) {
         float raw = angles_raw[t * n_angles + a];
         float dt_val = dt_arr[t * nh + h];
-        float delta = tanhf(raw) * PI * dt_val;
+        double delta = (double)(tanhf(raw) * PI * dt_val);
         state += delta;
-        // Wrap to [0, 2*PI) -- use fmodf + correction for negative values
-        state = fmodf(state, TWO_PI);
-        if (state < 0.0f) state += TWO_PI;
+        state = fmod(state, TWO_PI_64);
+        if (state < 0.0) state += TWO_PI_64;
 
-        angle_cumsum[t * nh * n_angles + h * n_angles + a] = state;
+        angle_cumsum[t * nh * n_angles + h * n_angles + a] = (float)state;
     }
 
-    // Write back persistent state
-    angle_state[h * n_angles + a] = state;
+    angle_state[h * n_angles + a] = (float)state;
 }
 
 // ============================================================================
@@ -357,19 +356,18 @@ extern "C" __global__ void m3_angle_dt_fwd_batch(
     int a = idx % n_angles;
 
     int state_idx = env * total_per_env + h * n_angles + a;
-    float state = angle_state[state_idx];
+    double state = (double)angle_state[state_idx];
+    const double TWO_PI_64 = 6.283185307179586;
 
-    // T=1: single timestep per env
     float raw = angles_raw[env * n_angles + a];
     float dt_val = dt_arr[env * nh + h];
-    float delta = tanhf(raw) * PI * dt_val;
+    double delta = (double)(tanhf(raw) * PI * dt_val);
     state += delta;
-    // Wrap to [0, 2*PI)
-    state = fmodf(state, TWO_PI);
-    if (state < 0.0f) state += TWO_PI;
+    state = fmod(state, TWO_PI_64);
+    if (state < 0.0) state += TWO_PI_64;
 
-    angle_cumsum[state_idx] = state;
-    angle_state[state_idx] = state;
+    angle_cumsum[state_idx] = (float)state;
+    angle_state[state_idx] = (float)state;
 }
 
 // Sequential angle accumulation for training: B envs, T timesteps each.
@@ -392,25 +390,22 @@ extern "C" __global__ void m3_angle_dt_fwd_seq(
     int h = idx / n_angles;
     int a = idx % n_angles;
 
-    // Load persistent state for this (env, head, angle)
-    float state = angle_state[b * total_per_env + h * n_angles + a];
+    double state = (double)angle_state[b * total_per_env + h * n_angles + a];
+    const double TWO_PI_64 = 6.283185307179586;
 
-    // Sequential accumulation over T timesteps
     for (int t = 0; t < T; t++) {
         int bt = b * T + t;
         float raw = angles_raw[bt * n_angles + a];
         float dt_val = dt_arr[bt * nh + h];
-        float delta = tanhf(raw) * PI * dt_val;
+        double delta = (double)(tanhf(raw) * PI * dt_val);
         state += delta;
-        state = fmodf(state, TWO_PI);
-        if (state < 0.0f) state += TWO_PI;
+        state = fmod(state, TWO_PI_64);
+        if (state < 0.0) state += TWO_PI_64;
 
-        // Save cumulative angle at each timestep
-        angle_cumsum[bt * total_per_env + h * n_angles + a] = state;
+        angle_cumsum[bt * total_per_env + h * n_angles + a] = (float)state;
     }
 
-    // Write back persistent state
-    angle_state[b * total_per_env + h * n_angles + a] = state;
+    angle_state[b * total_per_env + h * n_angles + a] = (float)state;
 }
 
 // ============================================================================

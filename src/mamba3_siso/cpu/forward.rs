@@ -311,11 +311,13 @@ pub fn forward_mamba3_layer_batched(
             if n_angles > 0 {
                 let ab = h * n_angles;
                 let pi = std::f32::consts::PI;
-                let two_pi = 2.0 * pi;
                 for a in 0..n_angles {
                     let raw = acts.data[base_t + o.angles_raw + a];
-                    angle_state[ab + a] += fast_tanh(raw) * pi * dt_val;
-                    angle_state[ab + a] -= two_pi * (angle_state[ab + a] / two_pi).floor();
+                    let delta = fast_tanh(raw) * pi * dt_val;
+                    let mut acc = angle_state[ab + a] as f64 + delta as f64;
+                    let two_pi_64 = 2.0 * std::f64::consts::PI;
+                    acc -= two_pi_64 * (acc / two_pi_64).floor();
+                    angle_state[ab + a] = acc as f32;
                 }
                 for a in 0..n_angles {
                     let (sin_a, cos_a) = angle_state[h * n_angles + a].sin_cos();

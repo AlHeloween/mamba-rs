@@ -162,14 +162,14 @@ pub fn mamba3_layer_step(
         // RoPE: per-head angle accumulation and rotation
         if n_rope > 0 {
             let angle_base = h * n_rope;
-            let two_pi = 2.0 * std::f32::consts::PI;
             let pi = std::f32::consts::PI;
             for a in 0..n_rope {
                 let raw = scratch.proj[angles_off + a];
                 let delta = fast_tanh(raw) * pi * dt_val;
-                state.angle_state[angle_base + a] += delta;
-                state.angle_state[angle_base + a] -=
-                    two_pi * (state.angle_state[angle_base + a] / two_pi).floor();
+                let mut acc = state.angle_state[angle_base + a] as f64 + delta as f64;
+                let two_pi_64 = 2.0 * std::f64::consts::PI;
+                acc -= two_pi_64 * (acc / two_pi_64).floor();
+                state.angle_state[angle_base + a] = acc as f32;
                 let (sin_a, cos_a) = state.angle_state[angle_base + a].sin_cos();
 
                 let i0 = 2 * a;
