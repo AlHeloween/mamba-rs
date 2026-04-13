@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Fixed
+
+- **Mamba-3 RoPE angle accumulation precision**: upcast angle accumulator to f64 for addition and modulo wrap, then back to f32 for sin/cos. Prevents drift over long inference sequences (390+ steps). Matches upstream `mamba3.py` fix from `state-spaces/mamba`. Applied to CPU inference, CPU training forward, and all 3 GPU CUDA angle kernels (`angle_dt_fwd`, `m3_angle_dt_fwd_batch`, `m3_angle_dt_fwd_seq`).
+
 ## 0.2.0
 
 **Mamba-3 SISO** — full implementation with CPU + GPU inference/training, CUDA Graph, 47 kernels.
