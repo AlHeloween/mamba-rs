@@ -1,0 +1,5096 @@
+Understanding Input Selectivity in Mamba:
+Impact on Approximation Power, Memorization, and Associative Recall Capacity
+Ningyuan Huang 1 2 Miguel Sarabia 3 Abhinav Moudgil 1 4 Pau Rodr´ıguez 3 Luca Zappella 3 Federico Danieli 3
+Abstract
+State-Space Models (SSMs), and particularly
+Mamba, have recently emerged as a promising
+alternative to Transformers. Mamba introduces
+input selectivity to its SSM layer (S6) and in-
+corporates convolution and gating into its block
+definition. While these modifications do improve
+Mamba’s performance over its SSM predeces-
+sors, it remains largely unclear how Mamba lever-
+ages the additional functionalities provided by
+input selectivity, and how these interact with the
+other operations in the Mamba architecture. In
+this work, we demystify the role of input selectiv-
+ity in Mamba, investigating its impact on function
+approximation power, long-term memorization,
+and associative recall capabilities. In particular:
+(i) we prove that the S6 layer of Mamba can repre-
+sent projections onto Haar wavelets, providing an
+edge over its Diagonal SSM (S4D) predecessor
+in approximating discontinuous functions com-
+monly arising in practice; (ii) we show how the S6
+layer can dynamically counteract memory decay;
+(iii) we provide analytical solutions to the MQAR
+associative recall task using the Mamba architec-
+ture with different mixers — Mamba, Mamba-2,
+and S4D. We demonstrate the tightness of our the-
+oretical constructions with empirical results on
+concrete tasks. Our findings offer a mechanistic
+understanding of Mamba and reveal opportunities
+for improvement.
+1. Introduction
+State Space Models (SSMs) have recently emerged as a
+promising approach for long-range sequence modeling, due
+to their computational efficiency compared to Transform-
+1Work done while at Apple 2Flatiron Institute, New York, USA
+3Apple 4Mila Research Institute, Montreal, Canada. Correspon-
+dence to: Ningyuan Huang <thuang@flatironinstitute.org>.
+Proceedings of the 42 nd International Conference on Machine
+Learning, Vancouver, Canada. PMLR 267, 2025. Copyright 2025
+by the author(s).
+ers, and parallelizability compared to (nonlinear) Recurrent
+Neural Networks (RNNs). In particular, Mamba (Gu & Dao,
+2023; Dao & Gu, 2024) demonstrated state-of-the-art per-
+formance on various language modeling tasks, with smaller
+model size and faster inference than Transformers. The suc-
+cess of Mamba has largely been attributed to the fact that
+the parameters in its SSM layer (S6) are input-dependent,
+leading to improved expressivity compared to its SSM pre-
+decessors (Cirone et al., 2024). The goal of this work is to
+provide a more structural explanation for Mamba’s superior
+performance. We do so by answering two questions: (i) how
+does the S6 layer’s expressivity translate into its practical
+performance? (ii) how can the S6 layer interact with the rest
+of the Mamba block to solve concrete tasks?
+We answer question (i) by providing a fine-grained analysis
+of the S6 layer via the lens of function approximation and
+long-term memory. We prove that the S6 layer can represent
+projections onto Haar wavelets and thus efficiently model
+discontinuous signals, which is relevant for solving practical
+tasks. Moreover, we show that the S6 layer still suffers
+from exponential memory decay, but highlight a mechanism
+which allows it to dynamically counteract such decay.
+Building on the understanding of the S6 layer, we then
+investigate how S6 interacts with the other components
+of the Mamba block (which also encompasses a short-
+convolution and a gate branch, see Tab. 2) to tackle the
+Multiple-Query Associative Recall (MQAR) task (Arora
+et al., 2024a). We prove that 1-layer Mamba and Mamba-2
+models can both solve MQAR, even without gating; we
+describe how S6 and the convolution interact to achieve this,
+and how Mamba-2 leverages its independent convolutions
+to get more parameter-efficient solutions. We also show that
+a 1-layer Mamba can solve MQAR exactly even without
+input-dependence in its SSM: this (perhaps unexpected) re-
+sult helps cementing the importance of convolution and gat-
+ing in the Mamba architecture. This analysis further informs
+us on how a variation to the functional form of Mamba,
+and particularly to how the SSM state matrix is affected by
+the input, can improve its performance on the INDUCTION
+HEADS task (Bietti et al., 2024; Sanford et al., 2024a).
+We complement our theoretical findings with numerical ex-
+periments on synthetic sequence modeling tasks. For the S6
+1
+Understanding Selectivity in Mamba
+layer, we demonstrate its approximation power on discon-
+tinuous functions, and its counteraction of memory decay,
+via the KEEP n-TH task — a generalization of KEEP FIRST
+from (Chiang & Cholak, 2022) requiring to memorize the
+n-th token in a sequence. Finally, for the full Mamba model,
+we confirm empirically that the model sizes prescribed the-
+oretically by our analytical solutions to the MQAR and
+INDUCTION HEADS tasks are tight in practice. Overall, our
+contributions can be summarized as follows:
+• We prove that the S6 layer of Mamba can represent
+projections onto Haar wavelets, providing an edge
+over the S4D layer in approximating discontinuous
+functions commonly arising in practice (Sec. 4.1).
+• We use sensitivity analysis to show the S6 layer gener-
+ally suffers from exponential decay of memory, and de-
+scribe how it can dynamically counteract it (Sec. 4.2).
+• We show how the Mamba architecture can exactly
+solve the MQAR task using different SSM mixers,
+with an explicit characterization of the required model
+size, which helps explaining their performance differ-
+ence (Sec. 5.1).
+• Our findings reveal opportunities to further improve
+Mamba, such as by changing the way input dependence
+is incorporated into the SSM state matrix (Sec. 5.2).
+2. Related Work
+State-Space Models (SSMs)
+SSMs (i.e., linear RNNs)
+have recently emerged as a promising sequence-modeling
+approach, with faster training than (nonlinear) RNNs, and
+faster inference time than Transformers. To enable long-
+term memorization capability, Gu et al. (2020) designed
+SSMs as polynomial approximations of signals, by prescrib-
+ing non-normal HiPPO matrices as state matrices. To im-
+prove computational efficiency, Gu et al. (2022b) proposed
+the S4 model: first by reparameterizing HiPPO as a sum
+of normal and low-rank matrices, then by further consider-
+ing a diagonal simplification in the S4D model (Gu et al.,
+2022a). All these SSMs are Linear Time-Invariant and thus
+computationally efficient, but consequently lack the ability
+to process information in a time-varying, input-dependent
+manner. Mamba (Gu & Dao, 2023) overcomes this by us-
+ing input-dependent SSM parameters, without sacrificing
+computational efficiency, showing performance competitive
+with Transformers on long-range language modeling tasks.
+Mamba-2 (Dao & Gu, 2024) simplifies the state matrix to a
+scalar multiple of identity and modifies the Mamba model
+architecture, showing further empirical improvements.
+Expressivity of SSMs
+The analyses on the expressivity
+of SSMs can be divided into two main approaches: formal
+language theory and approximation theory. Studies follow-
+ing the first approach investigate what formal languages
+can SSM recognize (Merrill et al., 2024; Sarrof et al., 2024;
+Grazzi et al., 2025). Studies ascribing to the second ap-
+proach — including this work — characterize what function
+classes can SSMs approximate: Li et al. (2022) showed that
+SSMs can approximate linear functionals with exponential
+memory decay; Wang et al. (2024) extended this analysis to
+nonlinear RNNs, showing however that adding nonlinearity
+(in the hidden state recurrence) does not fix the memory
+decay issues. Orvieto et al. (2024) proved that SSMs aug-
+mented with MLPs are universal approximators of regular
+functionals, but this improvement over Li et al. (2022) and
+Wang et al. (2024) requires the hidden state size to grow lin-
+early with sequence length. Cirone et al. (2024) extended the
+results from Li et al. (2022) to input-dependent SSMs such
+as Mamba, showing their universal approximation on the
+class of nonlinear functionals arising from controlled differ-
+ential equations. While Cirone et al. (2024) highlighted how
+Mamba can approximate a larger class of functionals than
+S4D, we explore the consequences of this observation by
+characterizing specific function classes arising in practice.
+Associative Recall Capability
+Associative Recall (AR)
+describes the ability of a model to retrieve information from
+its memory, based on the input context. Tasks for evaluating
+associative recall capabilities include INDUCTION HEADS
+(Olsson et al., 2022; Sanford et al., 2024a), k-HOP INDUC-
+TION HEADS (Sanford et al., 2024b), MULTIPLE-QUERY
+ASSOCIATIVE RECALL (MQAR) (Arora et al., 2024a), and
+NEEDLE-IN-THE-HAYSTACK (Kamradt, 2023).Empirically,
+Mamba (Gu & Dao, 2023) and Mamba-2 (Dao & Gu, 2024)
+demonstrated performance competitive with Transformers
+on (a simple version of) INDUCTION HEADS and MQAR,
+respectively. Theoretical understanding of how language
+models perform associative recall begins to emerge: Bi-
+etti et al. (2024) constructed a 2-layer Transformer with
+positional encoding that solves the INDUCTION HEADS
+task; Sanford et al. (2024b) extended such construction
+to a log-depth Transformer that solves the k-HOP INDUC-
+TION HEADS task; Arora et al. (2024a) showed that a gated
+convolution model can solve MQAR. However, these con-
+structions all require the model size to scale with the input
+sequence length. In this work, we show that 1-layer Mamba
+models can solve INDUCTION HEADS and MQAR with
+model size independent of the sequence length, highlighting
+the role of the convolution operation and the gate branch,
+that has been previously overlooked in the literature.
+3. Preliminaries: Linear RNNs as SSMs
+The application of a Linear RNN can be interpreted as the
+discrete solution of a linear dynamical system, or SSMs,
+˙h(t) = A(t)h(t)+B(t) x(t),
+y(t) = C(t)h(t). (1)
+2
+Understanding Selectivity in Mamba
+Here, the input x(t) ∈R acts as forcing term for the hidden
+state h ∈RN through the application of the input matrix
+B(t) ∈RN×1. The natural evolution of the hidden state
+is dictated by the state matrix A(t) ∈RN×N. Finally, the
+output y ∈Rdy is obtained by linearly transforming the
+hidden state via the output matrix C(t) ∈Rdy×N. Col-
+lectively, we call A(t), B(t), C(t) the SSM parameters.
+For computational efficiency, modern Linear RNNs con-
+sider diagonal state matrices, with negative eigenvalues
+A(t) = Λ(t) = −diag([λ1(t), . . . , λN(t)]). This simpli-
+fies the solution of (1), and ensures stability in the evolution
+of the hidden state. Under this assumption, and considering
+an initial state h(0) ≡0, we can explicitly write the hidden
+state solution as an integral function of the input (Dahleh
+et al., 2011):
+h(t) =
+Z t
+0
+e
+R t
+s Λ(r) drB(s) x(s) ds.
+(2)
+Generally, inputs to Linear RNNs are provided as (discrete)
+sequences of values [xt]T
+t=1, and thus we consider a dis-
+cretization of system (1). This amounts to substituting the
+differential equation with an (approximating) recurrent one:
+(1) ≈ht = Λtht−1 + Bt xt,
+yt = Cth(t),
+(3)
+where Λt, Bt, Ct are the discrete counterparts of Λ(t),
+B(t), C(t), respectively. Notice we can recover an explicit
+solution to (3) by unrolling the recurrence relation starting
+from h0 ≡0, to obtain
+ht =
+t
+X
+s=1
+ 
+tY
+r=s+1
+Λr
+!
+Bs xs.
+(4)
+The discretized SSM parameters are usually obtained follow-
+ing a Zeroth-Order Hold (ZOH) scheme (T´oth et al., 2008).
+Given a discrete time-step ∆(t) ∈R+, ZOH prescribes
+Λt = eΛ(t)∆(t),
+Ct = C(t),
+Bt = (Λ(t)∆(t))−1(eΛ(t)∆(t) −I)(B(t)∆(t)).
+(5)
+Note that in the original Mamba formulation the authors use
+Forward Euler for B(t) for simplicity, Bt = B(t)∆(t).
+In general, there is some flexibility in the choice of the func-
+tional form that the system parameters can take. The main
+requirements are that: (i) Λt is diagonal(-izable), so that
+the product Qt
+r=s+1 Λr in (4) can be computed efficiently;
+(ii) the eigenvalues of Λt are bounded in [−1, 1], to ensure
+stability; and that (iii) the SSM parameters do not depend
+on the state h(t), so to keep the system linear in h(t), and
+allow to compute its solution in parallel along t. The most
+relevant choices analyzed in this paper are: S4D (Gu et al.,
+2022a), which models linear time-invariant dynamics,
+∆(t) := 1, Λ(t) := Λ, B(t) := B, C(t) := C;
+(6)
+and Mamba (Gu & Dao, 2023), which models time-varying
+(input-dependent) dynamics,
+∆(t) := SoftPlus(Linear(x(t))),
+Λ(t) := Λ,
+B(t) ≡B(x(t)) := Linear(x(t)),
+C(t) ≡C(x(t)) := Linear(x(t)).
+(7)
+Note that both the Mamba-2 mixer and Linear Attention
+(Katharopoulos et al., 2020) can be interpreted as special-
+izations of Mamba (Dao & Gu, 2024), where Λt ≡λtI and
+Λt ≡I, respectively.
+4. Mamba SSM Mixer Layer Analysis
+In this section, we focus on the core of the Mamba architec-
+ture: its SSM mixer layer, also referred to as S6. The goal
+is to understand how input-selectivity impacts its expres-
+sivity and long-range memorization capacity. We show that
+an S6 layer can represent projections onto wavelets, thus
+efficiently modeling discontinuous signals. This is useful
+in practice, e.g., for isolating specific tokens in a sequence.
+For long-range memorization, we use sensitivity analysis
+to show that, while S6 suffers from exponential decay of
+memory (akin to S4D), input-selectivity allows to decrease
+the rate of such memory decay by “freezing time”. We vali-
+date our theoretical insights by experimenting on the KEEP
+n-TH task.
+4.1. Function Approximation Power: Expressing
+Wavelets via the S6 Layer
+We begin by analyzing the expressivity of the S6 layer and
+the power of its input-dependent discretization in terms of
+function approximation capabilities. We prove that an S6
+layer can approximate projections onto wavelets arbitrar-
+ily well (Thm. 1), while an S4D layer can at best project
+onto Fourier bases. Consequently, in approximating target
+functions with discontinuities, S6 achieves a faster approx-
+imation rate than S4D (Cor. 1). The advantage of S6 over
+S4D in approximating discontinuous functions translates
+into their performance differences in memorization tasks.
+Linear RNNs as Time-Projection Onto Basis Functions
+The idea that Linear RNNs could perform projections onto
+specific sets of basis functions is not new, and indeed served
+as theoretical grounding for the HiPPO work (Gu et al.,
+2020). However, to our knowledge, this interpretation has
+not yet been leveraged to explain the capabilities of modern
+Linear RNNs. In what follows, we take such interpretation
+to analyze their expressivity. To streamline the analysis and
+slim notation, we focus on 1D inputs and view them as
+continuous signals, xs ≡x(s) ∈R, s ∈[0, T], without
+loss of generality. For direct comparison with S4D, we con-
+sider a simplified version of S6 where the input-dependence
+only affects the state matrix via ∆(x), and does not af-
+3
+Understanding Selectivity in Mamba
+fect B(xt) (i.e., B(xt) = [B1, . . . , BN]⊤independent of
+the input xt). Substituting this into (2), and recalling that
+Λ = −diag([λ1, . . . , λN]), each component n = 1, . . . , N
+of the hidden state can be evaluated separately as an inner
+product between time-dependent functions:
+hM
+n(t) =
+Z t
+0
+e−λn
+R t
+s ∆(xr) drBn
+|
+{z
+}
+=:gMn(s;t,x)
+x(s) ds =
+
+gM
+n, x
+
+. (8)
+We refer to gM
+n(s; t, x) as the Mamba basis function, with
+the notation emphasizing its general dependency on the
+input signal x up to time t. For ease of comparison, we can
+recover an analogous formula to (8) also for S4D, by letting
+∆(xt) ≡1 ∀t (see also (6)). This gives
+hS4D
+n
+(t) =
+Z t
+0
+e−λn(t−s)Bn
+|
+{z
+}
+=:gS4D
+n (s;t)
+x(s) ds =
+
+gS4D
+n
+, x
+
+.
+(9)
+As we can see, S4D can provide only exponentials as basis
+functions. The approximation properties of these functions
+are limited: this is established in the literature, and ties back
+to the theory of Vandermonde matrices (Gautschi & Inglese,
+1987), as recently pointed out by Orvieto et al. (2024). Their
+poor performance are mainly due to: (i) the stability con-
+straint, Re(−λn) ≤0, which causes an exponentially fast
+decay to 0, de-facto limiting the effective support of said
+bases; (ii) the large degree of overlap between different
+bases (obtained by varying the only free parameter λn). The
+only way to curb these negative effects is by pushing the
+eigenvalues to be equispaced onto the complex unit disk,
+namely e−λn →ei 2πn
+N . This is precisely the strategy rec-
+ommended by Orvieto et al. (2024), however it reduces the
+application of the S4D layer to simply performing a Fourier
+transform. In contrast, the additional flexibility provided by
+the input-selectivity in Mamba allows for a much richer va-
+riety of basis functions (8) to be employed in the projection,
+an example of which is shown next.
+Mamba Bases Can Represent Haar Wavelets
+Here we
+provide the main theoretical result in this section, namely
+that the Mamba S6 layer can perform projections onto Haar
+wavelets. Due to their ability to capture local aspects of a
+function such as spikes and discontinuities, wavelets are
+generally better suited than Fourier bases in solving cer-
+tain signal processing tasks, (e.g., needles-in-the-haystack
+(Kamradt, 2023), transient signals (Mallat, 2012)). Recall
+the Haar wavelets are defined by dilation and translation,
+ψ0,0(s) = ψ(s) := 1[0, 1
+2 )(s) −1[ 1
+2 ,1](s)
+ψj,k(s) := 2j/2ψ(2js −k),
+(10)
+with j ∈N denoting the dilation scale, and k = 0, . . . , 2j−1
+the translation. Higher-order wavelets correspond to local-
+ized and “spiky” bases; see Fig. A.1 (left) for an illustration.
+Theorem 1.
+Consider a Haar wavelet ψj,k : [0, 1] →R,
+and the Mamba basis function (8) at t = 1, gM
+j,k(s; 1, x) =
+e−λj,k
+R 1
+s ∆j,k(xr)drBj,k. Let ˜xs := concat[xs; s] be the in-
+put signal augmented with time positional encoding. For any
+ϵ > 0, there exist 3 Mamba basis functions gM1
+j,k, gM2
+j,k, gM3
+j,k
+such that the approximation error
+ψj,k(s) −
+
+gM1
+j,k(s; 1, ˜x) + gM3
+j,k(s; 1, ˜x) −2gM2
+j,k(s; 1, ˜x)
+
+is smaller than ϵ, ∀s ∈[0, 1].
+The proof relies on tweaking the input-dependent discretiza-
+tion ∆(s) to output ∆(s) →∞or ∆(s) →0 (note that ∆
+can directly depend on the time variable s instead of the
+input signal xs, due to time Positional Encoding (PE)). This
+effectively allows Mamba to represent Heaviside functions
+as bases: by linearly combining shifted Heaviside bases, one
+can immediately recover the required Haar wavelets (see
+Fig. A.1, middle-right subplots). The details of the proof are
+reported in App. A.2, where we also proceed to relax the
+inclusion of PE as an assumption for Thm. 1.
+Theorem 1 translates into practical advantages of Mamba
+over S4D, as Haar wavelets are much better than Fourier
+bases for approximating discontinuous functions common
+in practice. This is formalized in the following corollary.
+Corollary 1.
+For a piecewise-constant function ρ(t) with
+m ≥1 discontinuities, there exist N Mamba basis functions
+(8) such that the L2 approximation error ∥ρ −PN
+n=1 gM
+n∥L2
+is of order O(2−N
+3m ). On the other hand, S4D basis func-
+tions can achieve an approximation error of O(N −1).
+Corollary 1 stems from Thm. 1, and from approximation
+results using Haar wavelets and Fourier bases available in
+the literature (Vetterli, 2001; Eckhoff, 1993); see proof in
+App. A.2. In the following, we illustrate how approximating
+wavelets translates into advantages on concrete tasks.
+Task KEEP n-TH
+The goal of the KEEP n-TH task is to
+recover the n-th element in a randomly-generated sequence,
+yt = xn. This generalizes the KEEP FIRST task in (Chiang
+& Cholak, 2022) where n = 1. The solution of KEEP n-TH
+can be directly represented by combining the projections
+of a piecewise-constant signal x(s) = Pt
+i=1 xi1[i−1,i)(s)
+onto two Heaviside functions H(s −n), H(s −(n −1)).
+As we have shown in Thm. 1, one S6 layer in Mamba can
+reproduce precisely this type of projections, provided the
+input is augmented with time-positional information. Thus,
+we arrive at the following Corollary:
+Corollary 2.
+There exists an S6 layer that solves KEEP
+n-TH on input augmented with time Positional Encoding.
+The proof of Cor. 2 is reported in App. A.3; the results in
+Tab. 1 verify empirically that Mamba with PE can perfectly
+4
+Understanding Selectivity in Mamba
+Table 1. KEEP FIFTH experimental results. Average accuracy
+across 3 seeds with T = 50 and |V | = 128. Standard error across
+3 seeds is 0.00 for all models. Mamba and S4D models consist of
+embedding, SSM (h ∈R8×32), and linear layers (without convo-
+lution and gating, see Tab. 2). Positional Encoding (PE) encodes
+the position in the last element of the embedding, resulting in |V |
+fewer parameters.
+MAMBA+PE
+MAMBA
+S4D
+S4D+PE
+TRANSFORMER
+Accuracy↑
+1.00
+0.08
+0.09
+0.08
+1.0
+Parameters
+9.2k
+9.3k
+8.8k
+8.7k
+6.4k
+solve the task (same as Transformers), whereas Mamba
+without PE and S4D both fail, highlighting the advantage of
+Mamba over S4D in approximating discontinuous functions
+in practice. Additional ablations on model size, sequence
+length, and the role of PE are reported in App. D.2.
+4.2. Long-Range Modelling: Sensitivity Analysis
+In this section, we examine the long-range memorization
+capacity of SSM layers, by performing a sensitivity analysis
+of the layer output with respect to changes to the input, as
+the sequence length increases. To this end, we analyze the
+derivative of the SSM hidden state at time t with respect
+to the past input at time j, | ∂ht
+∂xj |. We argue that preserving
+sensitivity (i.e., a non-zero derivative) is necessary for mem-
+orization: if the past input has no impact on the current state,
+one cannot hope for any information about it to be retained.
+With Lem. 1, we show how generally the sensitivity of an
+S6 layer decays exponentially fast, similarly to S4D. Thanks
+to input selectivity, however, the S6 layer can adjust the rate
+of this decay, thus dynamically tweaking the amount of in-
+formation to retain. In Lem. 2 we illustrate this mechanism,
+which proves to be useful for solving the task in Sec. 5.2.
+For simplicity, we consider 1D inputs xt ∈R. Given a
+generic, input-dependent recurrence relationship as in (4),
+we show in App. B that the sensitivity of the state with
+respect to its inputs at the j-th instant xj ∈R is given by
+∂ht
+∂xj
+=
+∂
+∂xj
+Pt
+s=1
+Qt
+r=s+1 Λr
+
+Bsxs
+
+=
+Qt
+r=j+1 Λr
+ 
+∂
+∂xj (Bjxj)
++ ∂Λj
+∂xj
+Pj−1
+s=1
+Qj−1
+r=s+1 Λr
+
+Bsxs
+
+.
+(11)
+Lemma 1.
+Consider the hidden states arising from the
+S4D and S6 SSMs defined in (6) and (7). The sensitivity of
+the n-th component of their states at time t with respect to
+the input at time j ≪t is given by, respectively,
+
+∂hS4D
+t
+∂xj
+ = ˜c(λn, Bn, x≤j) e−λn(t−(j+1)),
+
+∂hM
+t
+∂xj
+ = ˜c(∆, λn, Bn, x≤j) e−λn
+Pt
+r=j+1 ∆(xr),
+where ˜c(∆, λn, Bn, x≤j) depends on the input subsequence
+x≤j, independent of the sequence length t.
+Lemma 1 shows that both S4D and S6 have exponential
+decay of sensitivity when the sequence length t increases.
+For S4D, the only mitigation strategy is to set λn →0
+(and thus eλn →1). While S6 can implement the same
+strategy, it can also counteract the decay by adapting the
+input-dependent discretization, as formalized in Lem. 2.
+Lemma 2.
+Consider the discrete-time S6 in (7) where
+Bt = [B1(xt), . . . , Bn(xt)]⊤∈RN. Suppose there exists
+a constant c ≥0 such that
+lim
+t→∞λn
+t
+X
+r=1
+∆(xr) ≤c.
+(12)
+Then the sensitivity of the n-th component of the state at
+time t with respect to any input xj is lower bounded by
+lim
+t→∞
+
+∂hM
+t
+∂xj
+ ≥e−c
+
+∂
+∂xj
+Bn(xs) ∆(xs) xs
+ .
+(13)
+This implies that, to retain sensitivity for longer sequences,
+Mamba must necessarily push λ∆(xt) →0 (or equivalently,
+e−λ∆(xt) →1). We illustrate this with the KEEP n-TH task
+shown in Fig. 1, where we report the distribution of the
+learned parameters e−λ∆(xt) as we increase the sequence
+length. The shift towards 1 appears clear, validating the
+condition discussed in Lem. 2.
+Remark 1. While in this section we mainly focus on the
+properties of the original Mamba mixer layer (Gu & Dao,
+2023), we note that the results proven in Thm. 1, Lem. 1 and
+Lem. 2 hold analogously for the Mamba-2 mixer (Dao & Gu,
+2024). We remind that the Mamba-2 mixer layer can be seen
+as a simplification of Mamba’s, whereby the state matrix
+is parameterized by a single scalar, Λ = λI, rather than
+its full diagonal. Nonetheless, we do not rely on Mamba’s
+additional flexibility for our derivations; choosing a suitable
+scalar λ suffices (see details in App. A.2).
+5. Full Mamba Architecture Analysis
+In this section, we describe the full Mamba architecture and
+study how its SSM mixer coordinates with the other com-
+ponents in the model to efficiently solve associative-recall
+tasks. A full Mamba architecture includes an embedding
+layer, a number of Mamba mixer blocks, and an output layer.
+The mixer block is further composed of a short convolution,
+an SSM, and a gate — we refer to Tab. 2 for details in the
+differences between Mamba and Mamba-2, but point out
+that Mamba-2 leverages three independent short convolu-
+tions (rather than a single common one) to compute its SSM
+parameters, as outlined in (14b).
+5
+Understanding Selectivity in Mamba
+S4D Mamba
+> 0.95
+< 0.05
+Proportion of e−λ∆t
+Proportion of e−λ∆t vectors in bin
+         10
+         20
+         30
+         40
+         50
+0%
+25%
+50%
+75%
+100%
+Sequence length T
+Proportion of e−λ∆t vectors in bin
+  Timesteps before n        All timesteps
+0%
+25%
+50%
+75%
+100%
+Figure 1. Distribution of e−λ∆t computed on test inputs by models trained to successfully solve KEEP n-TH tasks for various sequence
+lengths T (same setup as Tab. 1). The left histogram confirms that the Mamba model must push e−λ∆t →1 as T increases, as implied
+by Lem. 2, to retain information throughout the sequence. Also the S4D must behave similarly. Meanwhile, the right histogram shows
+that, compared to S4D, Mamba has additional flexibility in forgetting irrelevant information (e−λ∆t is mostly 0 before timestep n) and
+memorizing information selectively (e−λ∆t is mostly 1 from timestep n onwards), while S4D is forced to memorize indiscriminately.
+Table 2. Comparison of Mamba (including S4D as a special case) and Mamba-2 (single-head) mixers. We denote with ⊙the Hadamard
+(elementwise) product, ⊗the Kronecker (outer) product, conv(x)[t] the t-th output of the convolution, and σ the pointwise nonlinearity.
+MAMBA
+MAMBA-2
+Λ ∈Rd×N, xt ∈Rd, ht ∈Rd×N
+Λ = λ ∈R, xt ∈Rd, ht ∈Rd×N
+(14a)
+ˆxt = σ(conv(x)[t]) ∈Rd
+ˆxt = σ(convu(Linear(x))[t]) ∈Rd
+(14b)
+∆t = SoftPlus(Linear(ˆxt)) ∈Rd
+(∆S4D
+t
+= 1)
+∆t = SoftPlus(Linear(xt)) ∈R
+(14c)
+Bt = Linear(ˆxt) ∈RN
+(BS4D
+t
+= B)
+Bt = σ(convB(Linear(x))[t]) ∈RN
+(14d)
+Ct = Linear(ˆxt) ∈RN
+(CS4D
+t
+= C)
+Ct = σ(convC(Linear(x))[t]) ∈RN
+(14e)
+ht = eΛ⊙(∆t⊗1N ) ⊙ht−1 + (∆t ⊙ˆxt) ⊗Bt
+ht = eλ∆tht−1 + (∆t ˆxt) ⊗Bt
+(14f)
+yt = ht Ct ∈Rd,
+˜yt = g(xt) ⊙yt := σ(Linear(xt)) ⊙yt ∈Rd
+(14g)
+While Mamba and Mamba-2 achieve performance competi-
+tive with Transformers and outperform their SSM predeces-
+sors in solving MQAR and INDUCTION HEADS, the details
+of how this solution can be assembled by the architecture
+remain elusive, with only lower bounds on the SSM mixer
+size available in the literature (Arora et al., 2024b; Sanford
+et al., 2024b), lacking the consideration of other compo-
+nents of Mamba such as convolution and gating. Here we
+close this gap by providing analytical constructions for a
+1-layer Mamba model that can exactly solve these tasks for
+any input. Perhaps counterintuitively, as we prove in Thm. 4,
+the components of a single Mamba mixer block are already
+powerful enough to solve MQAR exactly, even just using
+an S4D mixer layer (replacing the S6). With Thm. 2 and
+Thm. 3 we further show how, thanks to the input selectivity
+of S6, Mamba and Mamba-2 can leverage leaner mecha-
+nisms to solve MQAR. Particularly, the S6 layer can use Bt
+and Ct to efficiently structure information within its hidden
+state, and retrieve it when required. Finally, we show how
+the ability to structure the hidden state (used for MQAR)
+can be combined with the capacity to dynamically adjust
+the rate of memory decay (investigated for KEEP n-TH) to
+exactly solve INDUCTION HEADS with a variant of S6. We
+name this variant Mamba-∆⊤, and discuss it in Sec. 5.2.
+We remark that the constructions described in this section
+are just possible solutions that the Mamba architectures
+can implement, and we do not exclude the existence of
+alternative ones. Nonetheless, in Fig. 2 we verify empirically
+that our solutions are tight in terms of model size.
+5.1. 1-Layer Mamba Can Solve MQAR
+The MQAR task (Arora et al., 2024a) prescribes input and
+output sequences as follows
+x = [k1, v1, . . . , kκ, vκ
+|
+{z
+}
+κ key-value pairs
+,
+|
+. . . , ki1, . . . , kiκ, . . .
+|
+{z
+}
+shuffled keys, interwoven with noise
+],
+y = [×, ×, . . . , ×, ×,
+|
+. . . , vi1, . . . , vij, . . .
+].
+The keys ki are randomly chosen from a key set of size κ,
+whereas the values vi and the noise are randomly taken from
+a vocabulary of size |V |. The goal is to correctly predict the
+value associated with the corresponding key at the query
+positions, while other non-query positions (denoted with ×)
+are ignored.
+In this section we prove that the MQAR task can be ex-
+actly solved by three architectures: vanilla Mamba (Thm. 2),
+Mamba-2 (Thm. 3), and Mamba with an S4D mixer
+(Thm. 4), which we refer to as Mamba-S4D. Next we pro-
+6
+Understanding Selectivity in Mamba
+Table 3. Overview of exact solutions to the MQAR task that can be implemented by the Mamba model with S4D-mixer in Thm. 4 (top),
+Mamba-mixer in Thm. 2 (middle), and Mamba-2-mixer in Thm. 3 (bottom). While S4D-mixer lacks input selectivity in its SSM layer, it
+can solve MQAR via the gated-convolution mechanism on a larger embedding space (top). By contrast, both Mamba and Mamba-2 can
+solve MQAR with the same selective SSM layer construction without gating, and differ on the choice of convolutions (middle, bottom).
+S4D
+! Embedding
+! Convolution
+! SSM
+! Gate 
+Retrieves chunk of hidden state 
+corresponding to key.
+Hidden state evolution
+·
+·
+·
+·
+·
+·
+·
+·
+·
+k1
+v1
+v|V|
+kκ
+k1 v2 k2 v1 ⋯v3 k2
+Embedding
+Convolution
+SSM
+Classifier
+Gate
+xt
+̂xt
+yt
+Encodings for any (key, value) 
+combination can be uniquely identified.
+Combines pairs with non-linear size 2 kernels. 
+Filters out all except for (key, value)-pairs.
+Hidden state is a 
+vector, summing 
+over all the (key, value)-pairs.
+κ × |V|
+…
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·*
+*
+*
+*
+*
+pad:0
+̂x1
+̂x2
+̂x3
+̂x4
+̂x9
+…
+x1
+x2
+x3
+x4
+x8
+x9
+…
+·
+·
+·
+·
+·
+·
+1
+1
+1
+·
+·
+·
+1
+1
+1
+·
+·
+·
+·
+·
+1
+·
+·
+1
+·
+·
+1
+·
+1
+·
+·
+1
+·
+·
+1
+·
+1
+·
+·
+1
+·
+·
+1
+·
+·
+·
+·
+·
+1
+1
+1
+·
+·
+·
+…
+k1
+v2
+k2
+v1
+v3
+k2
+x1
+…
+…
+x2
+x3
+x4
+x8
+x9
+=
+v1
+·
+·
+·
+·
+·
+1
+·
+1
+·
+·
+·
+·
+1
+1
+1
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+y9
+⊙
+x9
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+1
+·
+·
+·
+·
+·
+·
+1
+·
+1
+·
+…
+…
+…
+h1 y1
+h2 y2
+h3 y3
+h4 y4
+h9 y9
++
++
++
++
+̂x1
+̂x2
+̂x3
+̂x4
+̂x9
+Retrieval
+Token  
+Space
+Embedding Outputs
+MAMBA
+! Embedding
+! Convolution
+! SSM
+Hidden state evolution
+k1 v2 k2 v1 ⋯v3 k2
+Embedding
+Convolution
+SSM
+Classifier
+Gate
+xt
+̂xt
+yt
+Token  
+Space
+Embedding Outputs
+Orthogonal encodings. Keys have higher 
+weights than values.
+Combines pairs with non-linear size 2 kernels. 
+Implements: ̂xt = ReLU ((xt×1 + 2xt) × 1)
+The hidden state columns are indexed by the keys, storing associated values. 
+Retrieval selects appropriate column. Ω denotes a scalar ≥9.
+…
+·
+·
+·
+·
+·
+·
+3
+·
+·
+1
+·
+·
+·
+1
+·
+·
+·
+·
+·
+3
+·
+·
+·
+·
+1
+·
+1
+·
+·
+·
+·
+·
+·
+3
+·
+*
+*
+*
+*
+*
+pad:0
+̂x1
+…
+…
+̂x2
+̂x3
+̂x4
+̂x9
+x1
+x2
+x3
+x4
+x8
+x9
+·
+·
+·
+·
+·
+·
+k1
+kκ
+v1
+v|V|
+·
+…
+·
+·
+·
+·
+·
+·
+2
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+2
+·
+·
+·
+·
+1
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+2
+·
+x1
+k1
+v2
+k2
+v1
+v3
+k2
+…
+…
+x2
+x3
+x4
+x8
+x9
+SSM inputs & 
+parameters
+3
+·
+·
+…
+̂x1
+⊙
+h1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+Ω
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+B( −)
+1
+·
+·
+…
+̂x2
+⊙
+h2
+·
+·
+·
+·
+·
+1
+·
+·
+·
+Ω
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+·
+3
+·
+…
+̂x3
+⊙
+h3
+·
+·
+·
+·
+·
+1
+·
+·
+·
+Ω
+·
+·
+·
+Ω
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+·
+1
+·
+…
+̂x4
+⊙
+h4
+·
+·
+·
+·
+·
+1
+·
+·
+·
+Ω
+·
+1
+·
+Ω
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+3
+·
+·
+…
+̂x9
+⊙
+h9
+·
+·
+·
+·
+·
+1
+·
+·
+·
+Ω
+·
+1
+·
+Ω
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+…
+…
+…
+B( −)
+B( −)
+B( −)
+B( −)
+·
+·
+·
+3
+·
+Ω
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+Ω
+·
+1
+·
+Ω
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+3
+·
+…
+v1
+−
+̂x9 h9
+y9
+ignored
+C( −)
+̂xt
+B( −) = C( −)
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+1
+·
+·
+·
+·
+1
+·
+·
+·
+̂xt
+−
+Retrieval
+MAMBA-2
+! Embedding
+! Convolution
+! SSM
+One-hot orthogonal encodings.
+There are 3 non-linear convolutions with 
+kernel size 2. ⋯x := Identity(xt)
+⋯xB
+t := Shift(xt)
+The hidden state columns are indexed by the keys, storing associated values only 
+(due to shift-1 convolution). Retrieval selects appropriate column.
+Hidden state evolution
+k1 v2 k2 v1 ̂ v3 k2
+Embedding
+SSM
+Classifier
+Gate
+xt
+Bt
+yt
+Conv
+Conv
+Ct
+⋯xt
+·
+·
+·
+·
+·
+·
+k1
+kκ
+v1
+v|V|
+·
+…
+·
+·
+·
+·
+·
+·
+1
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+1
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+x1
+k1
+v2
+k2
+v1
+v3
+k2
+…
+…
+x2
+x3
+x4
+x8
+x9
+pad:0
+…
+x1
+x2
+x3
+x4
+x8
+x9
+…
+* *
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+⋯xB
+1
+⋯x1
+**
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+⋯xB
+9
+⋯x9
+**
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+1
+·
+·
+·
+⋯xB
+4
+⋯x4
+**
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+⋯xB
+3
+⋯x3
+* *
+·
+·
+·
+·
+·
+·
+1
+·
+·
+1
+·
+·
+·
+·
+⋯x2
+⋯xB
+2
+…
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+…
+v1
+×
+⋯x9 h9
+y9
+C( × )
+·
+·
+·
+…
+⋯x1
+⊙
+⋯xB
+1
+h1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+…
+⋯x2
+⊙
+h2
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+·
+·
+·
+…
+⋯x3
+⊙
+⋯xB
+3
+h3
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+·
+1
+·
+…
+⋯x4
+⊙
+⋯xB
+4
+h4
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+·
+·
+·
+…
+⋯x9
+⊙
+⋯xB
+9
+h9
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+1
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
+·
++
+…
+…
+…
+B( × )
+B( × )
+B( × )
+B( × )
+B( × )
+⋯xB
+2
+SSM inputs & 
+parameters
+⋯xt
+B( × ) = C( × )
+·
+·
+·
+·
+·
+·
+·
+·
+1
+·
+·
+·
+1
+·
+·
+·
+·
+1
+·
+·
+·
+⋯xt
+×
+Token  
+Space
+Embedding Outputs
+Retrieval
+vide a sketch of the proofs, which we further illustrate in
+Tab. 3, and defer the full details to App. C.
+Theorem 2.
+There exists a 1-layer Mamba model without
+gating that solves MQAR with κ pairs using embedding
+size d = O(κ + log |V |), and state size N = κ.
+Proof sketch. We first prove a construction using standard
+basis embeddings with d = κ+|V |, and then apply Johnson-
+Linderstrass (JL) Lemma (see Lem. 4) to reduce dimension-
+ality. We specify the Mamba model as follows. A size-2
+(nonlinear) convolution kernel combines token pairs, ex-
+tracting key-value pairs and removing non-informative ones
+(e.g., value-key, value-value). The SSM layer (S6) organizes
+the hidden state matrix (14f) via Bt (14d) such that each
+column corresponds to a specific key, and holds the value
+embedding associated with said key (hence the state size
+N = κ). At query time, Ct (14e) uses the query(=key)
+embedding to retrieve the desired value from the correct
+column in the hidden state matrix.
+Theorem 3.
+There exists a 1-layer Mamba-2 model with-
+out gating that solves MQAR with κ pairs using embedding
+size d = O(log κ + log |V |), and state size N = log κ.
+Proof sketch. The construction is similar to Thm. 2 for
+Mamba, but with some simplifications due to the additional
+flexibility provided by three independent convolutions in
+Mamba-2. Specifically, we set convB = (1, 0) as a shift-
+1 convolution kernel (i.e., shifting the input sequence to
+the right by one position), while convu ≡convC as the
+identity maps. Once again, JL Lemma allows us to reduce
+dimensionalities for both keys and values embeddings.
+Remark 2. Our construction of Mamba-2 is similar to the
+construction in (Li et al., 2025) that shows how convolution-
+augmented Transformers can solve MQAR. Indeed, in light
+of the convolution layer in Tab. 2, we can interpret Mamba-2
+as a convolution-augmented subquadratic Transformer.
+Remark 3. With the results from Thm. 2 and 3, we can
+infer that the extra convolutions included in the Mamba-
+2 layer over vanilla Mamba in general allow for a more
+parameter-efficient solution of MQAR, by noting that d =
+log κ + log |V | < κ + log |V |, and N = log κ < κ.
+Theorem 4.
+There exists a 1-layer Mamba model with an
+S4D mixer that solves MQAR with κ pairs, using embed-
+ding size d = O(κ log |V |), and state size N = 1.
+7
+Understanding Selectivity in Mamba
+Our bound
+100% accuracy
+99% accuracy
+<99% accuracy
+S4D
+MAMBA
+MAMBA-2
+Model dimension (d)
+4
+8
+16
+32
+16
+32
+64
+128
+256
+4
+8
+16
+32
+8
+16
+32
+64
+4
+8
+16
+32
+4
+8
+Number of keys (κ)
+Figure 2. Trained models accuracy on MQAR task (best of 7 seeds), varying κ and d. For
+S4D N = 4, for Mamba N = 2κ, and for Mamba-2 N = 8 ln κ. We use T = 100 and
+|V | = 128 for all runs. The theoretical bounds on model size for assembling the solutions
+proposed in Thm. 2 to 4 (black lines) separate reasonably well models that can achieve
+100% accuracy (above black lines) from those that do not (below). In terms of model size
+efficiency, Mamba-2 is better than Mamba, which in turn is better than S4D.
+MAMBA AND MAMBA-∆⊤
+Model dimension (d)
+5
+10
+20
+40
+80
+2
+4
+8
+16
+32
+64
+128
+Vocabulary size (|V |)
+Figure 3. Trained models accuracy on INDUC-
+TION HEADS task (best of 5 seeds), varying
+|V | and d, N = 4|V |. Mamba-∆⊤’s per-
+formance (outlined) is equal or better than
+Mamba’s (filled) and only hits 100% above
+the theoretical bound from Lem. 3 (black).
+Proof sketch. We first present the construction using d =
+O(κ|V |), and again apply JL Lemma to reduce to d =
+O(κ log |V |). To overcome the limitation given by the lack
+of input selectivity in the SSM layer, we organize the hidden
+state along the embedding dimension only, and partition it
+so that each chunk holds the value associated with a specific
+key. At query time, the retrieval of the desired key-value
+chunk is done by leveraging the gating layer.
+Remark 4. Our construction of the S4D-mixer relies both
+on gated convolution and the SSM recurrence. Arora et al.
+(2024a) provided a construction to solve MQAR based on
+gated convolution only. While such construction has better
+parallelizability, it requires the convolution kernel size to
+scale with the sequence length (in order to look back and
+find the matching keys). In contrast, our construction relies
+on size-2 kernels only, thanks to the SSM recurrence.
+To validate our theoretical constructions, we train Mamba,
+Mamba-2, and Mamba-S4D models with varying embed-
+ding size d, on MQAR tasks with different number of key-
+value pairs κ. The goal is to check how tight in practice are
+the theoretical bounds on model dimension derived above,
+and whether indeed trained models must respect them to
+solve the tasks. Results are reported in Fig. 2, where dashed
+curves denote our theoretical bounds and markers indicate
+empirical results. Notice our bounds in Thm. 2 to 4 are close
+to the empirical threshold between models sizes that can
+recover exact solutions or not, illustrating the tightness of
+our theoretical results. See additional details in App. D.3.
+5.2. 1-Layer Mamba-∆⊤Can Solve INDUCTION HEADS
+The INDUCTION HEADS task was first introduced by Ols-
+son et al. (2022) to study Associative Recall capabilities
+in Transformers. Here we use the formulation from San-
+ford et al. (2024a): given an input sequence of tokens
+[x1, . . . , xt] from a finite vocabulary xt ∈V , the goal
+is to report, for each xt, the token coming immediately
+after the latest previous occurrence in the input of token
+xi. That is, the output yt must be yt = xj(t)+1 where
+j(t) = max{j : j < t, xj = xt} (or a “blank” token,
+yi = ×, if xt appears for the first time).
+Note the INDUCTION HEADS task is similar to MQAR,
+but with two significant differences. (i) There is no logical
+distinction between keys and values, so the model needs to
+identify the role of each token, but this can be handled by
+the short convolution, as we will show. More importantly,
+(ii) we need to retain information about only the latest previ-
+ous occurrence of a token, so the model should dynamically
+forget and remember information pertaining different to-
+kens. Since the latter memorization ability was investigated
+in Sec. 4.2, it is natural to leverage those insights in our
+solution. To do so efficiently, we introduce a slight variation
+to the S6 layer: the Mamba-∆⊤SSM mixer, prescribing the
+following hidden state evolution
+ht = eΛ⊙(1d⊗∆(ˆxt)) ⊙ht−1 + ˆxt ⊗Bt.
+(15)
+Comparing this to (14f), the only difference lies in the action
+of ∆(ˆxt), which now varies along the state dimension N,
+rather than the embedding dimension d. While Gu & Dao
+(2023) hypothesized a similar performance for both versions,
+our findings reveal that the dependence along state dimen-
+sion is better suited to solving the INDUCTION HEADS task:
+Lemma 3.
+There exists a 1-layer Mamba model with
+the Mamba-∆⊤SSM mixer (15) that solves INDUCTION
+HEADS with vocabulary V using embedding size d = 2|V |
+and state size N = |V |.
+Proof sketch. The proof follows closely the MQAR con-
+struction, in that we leverage the matrix structure in the
+hidden state such that its columns are indexed by the keys
+8
+Understanding Selectivity in Mamba
+and store the associated values. In the INDUCTION HEADS
+task, though, each token xi acts as key in the (xi, xi+1) pair,
+and as value in the (xi−1, xi) pair. To handle this distinction,
+we simply duplicate the embedding, and let the convolution
+layer correctly combine tokens information pairwise, so
+that after convolution each token encapsulates information
+both regarding a value and its preceding key. Moreover, we
+use ∆(xt) to selectively erase outdated information, or to
+retain currently valid information, depending on the input
+observed. Pushing ∆(xt) →∞flushes a previously mem-
+orized value, while ∆(xt) →0 preserves it. We refer to
+App. C.2 for the detailed proof.
+Remark 5. To solve INDUCTION HEADS, Bietti et al.
+(2024); Sanford et al. (2024b) constructed 2-layer Trans-
+formers relying on PE and with size scaling as sequence
+length. On the other hand, we propose a 1-layer Mamba
+composing a convolution and a variant SSM layer. Notably,
+this allows us to drop the PE and thus have the model size
+depend only on |V |, and not the sequence length, improving
+upon the constructions for Transformers.
+To demonstrate the efficiency of our Mamba-∆⊤variant
+on the INDUCTION HEADS task, we compare it against the
+Mamba baseline, and report results in Fig. 3. For all model
+sizes considered, Mamba-∆⊤performs equally or better,
+demonstrating that selectivity along the state dimension (in
+the state matrix) improves Mamba’s ability to solve the
+INDUCTION HEADS task.
+6. Conclusion and Future Work
+In this work, we demystify the role of input selectivity in
+Mamba, showing its impact on approximation power, long-
+term memory, and associative recall capabilities. We prove
+that the S6 layer can efficiently represent discontinuous sig-
+nals and adaptively mitigate sensitivity decay. We also un-
+cover the role of other architectural components in Mamba,
+particularly convolution and gating. We present a mecha-
+nistic explanation of how Mamba solves memorization and
+associative recall tasks, with tight theoretical model size
+bounds matching empirical results. Our findings reveal op-
+portunities to further improve Mamba, such as an alternative
+way to inject input dependence within the SSM state matrix.
+Our current theory does not consider the aspects of optimiza-
+tion and generalization, both of which are interesting future
+directions to explore. Moreover, our analysis focuses on sim-
+ple associative recall tasks; extending it to more complicated
+tasks such as k-HOP INDUCTION HEADS (Sanford et al.,
+2024b), SEQUENTIAL FUNCTION COMPOSITION (Chen
+et al., 2024), and POINTER VALUE RETRIEVAL (Zhang
+et al., 2021) would be a natural next step. Overall, our work
+and proposed improvements add to the growing understand-
+ing of SSMs and could accelerate their development.
+Impact Statement
+The goal of this paper is to improve the understanding of
+the Mamba architecture, specifically through analyzing the
+role of input selectivity. Our findings contribute to the ad-
+vancement of State Space Models, which may in turn further
+democratize access to Large Language Models, sharpening
+both the existing positive and negative aspects of LLMs. No
+additional societal impact is expected from this work.
+Acknowledgements
+We thank Pierre Ablin, Samy Bengio, Adam Goli´nski, Aryo
+Lotfi, Jason Ramapuram, Jonathan Sheaffer (in alphabetical
+order) for their helpful feedback and critical discussions
+throughout the process of writing this paper. We would also
+like to thank Alberto Bietti for pointers to the associative
+recall tasks.
+References
+Arora, S., Eyuboglu, S., Timalsina, A., Johnson, I., Poli,
+M., Zou, J., Rudra, A., and Re, C. Zoology: Measuring
+and Improving Recall in Efficient Language Models. In
+International Conference on Learning Representations,
+2024a.
+Arora, S., Eyuboglu, S., Zhang, M., Timalsina, A., Alberti,
+S., Zou, J., Rudra, A., and Re, C. Simple Linear Attention
+Language Models Balance the Recall-Throughput Trade-
+off. In International Conference on Machine Learning,
+volume 235, pp. 1763–1840, 2024b.
+Bietti, A., Cabannes, V., Bouchacourt, D., Jegou, H., and
+Bottou, L. Birth of a Transformer: A Memory Viewpoint.
+Advances in Neural Information Processing Systems, 36,
+2024.
+Chen, L., Peng, B., and Wu, H. Theoretical Limitations of
+Multi-Layer Transformer. arXiv preprint, 2024. URL
+https://arxiv.org/abs/2412.02975.
+Chiang, D. and Cholak, P. Overcoming a Theoretical Lim-
+itation of Self-Attention. In Annual Meeting of the As-
+sociation for Computational Linguistics, volume 1, pp.
+7654–7664, 2022. doi: 10.18653/v1/2022.acl-long.527.
+Cirone, N. M., Orvieto, A., Walker, B., Salvi, C., and Lyons,
+T. Theoretical Foundations of Deep Selective State-Space
+Models. In Advances in Neural Information Processing
+Systems, volume 37, 2024.
+Dahleh, M., Dahleh, M. A., and Verghese, G. Lectures on
+Dynamic Systems and Control. MIT OpenCourseWare,
+2011. URL https://ocw.mit.edu/courses/
+6-241j-dynamic-systems-and-control-s
+9
+Understanding Selectivity in Mamba
+pring-2011/996025f6db0d90b00f11c44fc4
+9b85f9_MIT6_241JS11_textbook.pdf.
+Dao, T. and Gu, A. Transformers are SSMs: Generalized
+Models and Efficient Algorithms Through Structured
+State Space Duality. In International Conference on Ma-
+chine Learning, volume 235, pp. 10041–10071, 2024.
+Eckhoff, K. S. Accurate and Efficient Reconstruction of
+Discontinuous Functions from Truncated Series Expan-
+sions. Mathematics of Computation, 61(204):745–763,
+1993. doi: 10.1090/S0025-5718-1993-1195430-1.
+Gautschi, W. and Inglese, G. Lower Bounds for the Con-
+dition Number of Vandermonde Matrices. Numerische
+Mathematik, 52:241–250, 1987. doi: 10.1007/BF013988
+78.
+Grazzi, R., Siems, J., Franke, J. K., Zela, A., Hutter, F., and
+Pontil, M. Unlocking State-Tracking in Linear RNNs
+Through Negative Eigenvalues. In International Confer-
+ence on Learning Representations, 2025.
+Gu, A. and Dao, T. Mamba: Linear-Time Sequence Mod-
+eling with Selective State Spaces. arXiv preprint, 2023.
+URL https://arxiv.org/abs/2312.00752.
+Gu, A., Dao, T., Ermon, S., Rudra, A., and R´e, C. HiPPO:
+Recurrent Memory with Optimal Polynomial Projections.
+Advances in Neural Information Processing Systems, 33:
+1474–1487, 2020.
+Gu, A., Goel, K., Gupta, A., and R´e, C. On the Parameteri-
+zation and Initialization of Diagonal State Space Models.
+Advances in Neural Information Processing Systems, 35:
+35971–35983, 2022a.
+Gu, A., Goel, K., and R´e, C. Efficiently Modeling Long
+Sequences with Structured State Spaces. In International
+Conference on Learning Representations, 2022b.
+Kamradt, G. Needle In A Haystack - Pressure Testing LLMs.
+Github, 2023. URL https://github.com/gkamr
+adt/LLMTest_NeedleInAHaystack. [Accessed
+2025-05-29].
+Katharopoulos, A., Vyas, A., Pappas, N., and Fleuret, F.
+Transformers are RNNs: Fast Autoregressive Transform-
+ers with Linear Attention. In International Conference
+on Machine Learning, pp. 5156–5165, 2020.
+Kingma, D. P. and Ba, J. Adam: A Method for Stochastic
+Optimization. arXiv preprint, 2014. URL https://ar
+xiv.org/abs/1412.6980.
+Li, M., Zhang, X., Huang, Y., and Oymak, S. On the Power
+of Convolution Augmented Transformer. In Conference
+on Artifical Intelligence, number 17, pp. 18393–18402,
+2025. doi: 10.1609/aaai.v39i17.34024.
+Li, Z., Han, J., Weinan, E., and Li, Q. Approximation and
+Optimization Theory for Linear Continuous-Time Re-
+current Neural Networks. Journal of Machine Learning
+Research, 23(42):1–85, 2022.
+Mallat, S. Group Invariant Scattering. Communications on
+Pure and Applied Mathematics, 65(10):1331–1398, 2012.
+doi: 10.1002/cpa.21413.
+Merrill, W., Petty, J., and Sabharwal, A. The Illusion of
+State in State-Space Models. In International Conference
+on Machine Learning, 2024.
+Olsson, C., Elhage, N., Nanda, N., Joseph, N., DasSarma,
+N., Henighan, T., Mann, B., Askell, A., Bai, Y., Chen,
+A., Conerly, T., Drain, D., Ganguli, D., Hatfield-Dodds,
+Z., Hernandez, D., Johnston, S., Jones, A., Kernion, J.,
+Lovitt, L., Ndousse, K., Amodei, D., Brown, T., Clark,
+J., Kaplan, J., McCandlish, S., and Olah, C. In-context
+Learning and Induction Heads. Transformer Circuits
+Thread, 2022. URL https://transformer-cir
+cuits.pub/2022/in-context-learning-a
+nd-induction-heads/index.html.
+Orvieto, A., De, S., Gulcehre, C., Pascanu, R., and Smith,
+S. L. Universality of Linear Recurrences Followed by
+Non-linear Projections: Finite-Width Guarantees and Ben-
+efits of Complex Eigenvalues. In International Confer-
+ence on Machine Learning, 2024.
+Sanford, C., Hsu, D., and Telgarsky, M. One-Layer Trans-
+formers Fail to Solve the Induction Heads Task. arXiv
+preprint, 2024a. URL https://arxiv.org/abs/
+2408.14332.
+Sanford, C., Hsu, D., and Telgarsky, M. Transformers, Paral-
+lel Computation, and Logarithmic Depth. In International
+Conference on Machine Learning, 2024b.
+Sarrof, Y., Veitsman, Y., and Hahn, M. The Expressive
+Capacity of State Space Models: A Formal Language
+Perspective. Advances in Neural Information Processing
+Systems, 37:41202–41241, 2024.
+T´oth, R., Felici, F., Heuberger, P., and Van den Hof, P. Cru-
+cial Aspects of Zero-Order Hold LPV State-Space Sys-
+tem Discretization. IFAC Proceedings Volumes, 41(2):
+4952–4957, 2008.
+Vershynin, R. High-Dimensional Probability: An Intro-
+duction with Applications in Data Science. 2018. doi:
+10.1017/9781108231596.
+Vetterli, M. Wavelets, Approximation, and Compression.
+IEEE Signal Processing Magazine, 18(5):59–73, 2001.
+doi: 10.1109/79.952805.
+10
+Understanding Selectivity in Mamba
+Wang, S., Li, Z., and Li, Q. Inverse Approximation Theory
+for Nonlinear Recurrent Neural Networks. In Interna-
+tional Conference on Learning Representations, 2024.
+Zhang, C., Raghu, M., Kleinberg, J., and Bengio, S. Pointer
+Value Retrieval: A New Benchmark for Understanding
+the Limits of Neural Network Generalization.
+arXiv
+preprint, 2021. URL https://arxiv.org/abs/
+2107.12580.
+11
+Understanding Selectivity in Mamba
+A. Approximation Power of Mamba
+A.1. Notation
+We typically use bold upper case A, B, C to denote matrices and bold lower case x, y to denote vectors or sequence. In
+Sec. 3 and Sec. 4, the hidden state at time t is denoted as h(t) (in the continuous setting) or ht (in the discrete setting). In
+Sec. 5, with a slight abuse of notation, the hidden state ht ∈Rd×N denotes a matrix. We use A, λ to denote the discretized
+versions of A, λ. We use R, N to denote the reals and the natural number. The identity matrix is denoted as I, where the
+all-ones vector is denoted as 1. We let diag(v) be the diagonal matrix with diagonal filled with the vector v. We denote
+SoftPlus, ReLU, SiLU as the corresponding pointwise nonlinearity σ, and Linear as the linear layer. We let 1 be the
+indicator function, H(s) be the heaviside function. We denote with ⊙the Hadamard (elementwise) product and ⊗the
+Kronecker (outer) product. We use d for embedding size, N for state size, and t or T for sequence length.
+A.2. Mamba Approximates Haar Wavelets
+In the following, we recall and outline the complete proof for Thm. 1.
+Theorem 1.
+Consider a Haar wavelet ψj,k : [0, 1] →R, and the Mamba basis function (8) at t = 1, gM
+j,k(s; 1, x) =
+e−λj,k
+R 1
+s ∆j,k(xr)drBj,k. Let ˜xs := concat[xs; s] be the input signal augmented with time positional encoding. For any
+ϵ > 0, there exist 3 Mamba basis functions gM1
+j,k, gM2
+j,k, gM3
+j,k such that the approximation error
+ψj,k(s) −
+
+gM1
+j,k(s; 1, ˜x) + gM3
+j,k(s; 1, ˜x) −2gM2
+j,k(s; 1, ˜x)
+
+is smaller than ϵ, ∀s ∈[0, 1].
+Proof. The Haar wavelet at scale j with translation k is defined on the interval s ∈[0, 1] as
+ψj,0(s) =
+
+
+
+
+
+2j/2
+s ∈[0, 2−(j+1))
+−2j/2
+s ∈[2−(j+1), 2−j)
+0
+otherwise
+,
+(16)
+ψj,k(s) = ψj,0(s −2−jk) =
+
+
+
+
+
+2j/2
+s ∈[2−jk, 2−jk + 2−(j+1))
+−2j/2
+s ∈[2−jk + 2−(j+1), 2−j(k + 1))
+0
+otherwise
+.
+(17)
+See also Fig. A.1 for an illustration. Notice that each wavelet can be represented as a linear combination of three shifted
+Heaviside functions, namely:
+ψj,k(s) = 2
+j
+2
+
+H
+ s −2−jk
+
+−2H
+
+s −
+
+2−jk + 2−(j+1)
++ H
+ s −2−j(k + 1)
+
+,
+(18)
+where H(s) = 1s>0 denotes the Heaviside function. The goal is then to show that Mamba can indeed reproduce a shifted
+Heaviside as one of its basis functions gM
+j,k, by opportunely choosing its free parameters λj,k, ∆j,k and Bj,k determining
+gM
+j,k.
+Figure A.1. (Left) Example of Haar Wavelets; (Middle-Right) Shape of the 3 Mamba basis gM1
+j,k, gM2
+j,k, gM3
+j,k, whose linear combination can
+arbitrarily approximate the Haar wavelet ψj,k.
+12
+Understanding Selectivity in Mamba
+To this end, we consider a 1D input. We set λj,k = 1 and Bj,k = 2
+j
+2 , which reduces the Mamba basis function to
+gM
+j,k(s; 1, x) = 2
+j
+2 e−
+R 1
+s ∆(x(r)) dr.
+(19)
+We then leave it to the last free parameter ∆(x(r)) to perform most of the heavy-lifting. By extending the input signal x to
+include the absolute time t as an input, we can directly write ∆(x(t)) = ∆(t) (this requirement will be relaxed in Prop. 1).
+Notice that we can use the Mamba basis function to recover a (scaled) Heaviside centered at any given instant ˆtk, provided
+∆(t) behaves as follows:
+∆(s) →ˆ∆k(s) =
+(
+∞
+if s < ˆtk
+0
+else
+=⇒
+gM
+j,k(s; 1, x) =
+(
+0
+if s < ˆtk
+2
+j
+2
+else
+→2
+j
+2 H(s −ˆtk).
+(20)
+Remember from (7) that ∆(s) ≡∆(s; b∆, w∆) := SoftPlus (w∆s + b∆). Note that
+lim
+x→−∞Softplus(x) = 0,
+lim
+x→∞Softplus(x) = ∞.
+(21)
+Then, by choosing b∆= −w∆ˆtk, and pushing w∆→−∞, we can get arbitrarily close to approximating ˆ∆k(s). Concretely,
+we have
+gM
+j,k(s; 1, x) := 2
+j
+2 e−
+R 1
+s ∆(r;b∆=−w∆ˆtk,w∆) dr
+w∆→−∞
+−−−−−−→2
+j
+2 H
+ s −ˆtk
+
+.
+(22)
+By substituting ˆtk ∈{2−jk, 2−jk + 2−(j+1), 2−j(k + 1)}, the resulting mamba basis functions gM1
+j,k, gM2
+j,k, gM3
+j,k can approxi-
+mate arbitrarily well H(s −2−jk), H(s −(2−jk + 2−(j+1))), H(s −2−j(k + 1)), respectively, which are precisely the
+shifted Heaviside functions appearing in (18). This allows us to finally write that ∀ϵ, ∃w∆such that
+ψj,k(t) −
+
+gM1
+j,k + gM3
+j,k −2gM2
+j,k
+ < ϵ.
+(23)
+Additionally, to remove the requirement of explicitly augmenting the Mamba input with time positional encoding, we show
+that Mamba can autonomously recover said time position by considering a constant input xt ≡1 ∀t. This further relaxes the
+assumption in Thm. 1 to using an additional Mamba layer receiving all-ones as input.
+Proposition 1. A 1-layer Mamba can recover absolute time, given an all-ones input.
+Proof. The proof follows by considering a Mamba layer (8) with B ≡1, λ ≡0. Substituting this into (8), and providing an
+all-one input xt ≡1 ∀t gives
+hM(t) =
+Z t
+0
+x(s)ds = t.
+(24)
+This applies analogously to the discrete view, hM
+t = Pt
+s=1 x(s) = t.
+Before proving Cor. 1, we recall the function approximation problem. Given a function ρ ∈L2([0, 1]) (as a function of time
+t ∈[0, 1]), and a set of bases parameterized by the SSM {gn} (e.g. Mamba or S4D), the goal is to project ρ into the best
+size-N basis GN = {g1, . . . , gN} that minimizes the approximation error,
+arg min
+GN
+∥ρ −projGN (ρ)∥L2 = arg min
+GN
+Z 1
+0
+ ρ(t) −projGN (ρ)(t)
+2 dt,
+(25)
+where N denotes the hidden state size and
+projGN (ρ) :=
+X
+gn∈GN
+⟨ρ, gn⟩gn.
+(26)
+We note that the N basis GN is optimally chosen for the target function ρ (instead of using a fixed set of N bases independent
+of ρ). The inner products ⟨ρ, gn⟩=
+R t
+0 ρ(t)gn(t)dt for the various n determine the coefficients of the projection of the target
+function ρ onto the basis GN.
+We are now ready to prove Cor. 1.
+13
+Understanding Selectivity in Mamba
+Corollary 1.
+For a piecewise-constant function ρ(t) with m ≥1 discontinuities, there exist N Mamba basis functions (8)
+such that the L2 approximation error ∥ρ −PN
+n=1 gM
+n∥L2 is of order O(2−N
+3m ). On the other hand, S4D basis functions can
+achieve an approximation error of O(N −1).
+Proof. As discussed in Sec. 4.1, a S4D basis function (9) can represent any Fourier basis function fn = ei2πn. When
+approximating a target function with discontinuities, the Fourier coefficients decay very slowly (Eckhoff, 1993),
+lim
+n→∞|⟨ρ, fn⟩| = O(n−1).
+(27)
+This implies that using N Fourier bases (and thus N S4D basis functions) for approximating discontinuous functions yields
+an approximation error O(N −1), proving the second part of Cor. 1.
+By Thm. 1, N Mamba basis functions can approximate arbitrarily close any N/3 number of Haar wavelets. A set of N/3
+Haar wavelets can achieve an approximation error of O(2−N/3m) (Vetterli, 2001) when targeting a piecewise-constant
+function with m ≥1 discontinuities. We provide a concrete argument for completeness. Suppose the function ρ is piecewise
+constant with m = 1 discontinuity. Then using an optimal set of N Haar wavelets HN ⊂{ψj,k}j∈N,0≤k≤2j−1, we can
+achieve an approximation error of
+min
+HN ∥ρ −projHN (ρ)∥L2 =
+∞
+X
+j=0
+2j−1
+X
+k=0
+⟨ρ, ψj,k⟩2 −
+X
+ψj,k∈HN
+⟨ρ, ψj,k⟩2
+(28)
+=
+∞
+X
+j=0
+⟨ρ, ψj,k(ρ)⟩2 −
+N−1
+X
+j=0
+⟨ρ, ψj,k(ρ)⟩2
+(29)
+=
+∞
+X
+j=N
+⟨ρ, ψj,k(ρ)⟩2
+(30)
+= O(2−N).
+(31)
+The second equality holds by noting that ⟨ρ, ψj,k⟩=
+R 1
+0 ρ(t)ψj,k(t)dt = 0 if ρ is constant in the interval [2−j(k −1), 2−jk].
+Thus, for a piecewise-constant ρ with one discontinuity, only one wavelet at each scale j has ⟨ρ, ψj,k(x)⟩̸= 0. Given that
+we can choose adaptively the best N wavelets, we pick the ones with nonzero coefficients across all J = N scales. Then
+the approximation error is bounded the coefficient the highest scale, which has magnitude O(2−N/2) and squared error
+O(2−N). Similar analysis shows that for piecewise-constant functions with m discontinuities, the optimal adaptive wavelet
+basis with N wavelet functions achieves an approximation error of O(2−N/m).
+Remark 6. While the assumption of a piecewise-constant target function seems restrictive in Cor. 1, we note that this
+can be relaxed to a continuous target function ρ by additionally assuming the input signals x are piecewise-constant. The
+equivalence is due to the intermediate value theorem. Note that piecewise-constant input signals are ubiquitous in language
+modelling tasks, where xt takes values in a finite-size vocabulary.
+A.3. Mamba can solve KEEP n-TH
+Here we provide a direct application of the result from App. A.2, to explain the ability of Mamba to exactly solve the KEEP
+n-TH task when equipped with Positional Encoding.
+Corollary 2.
+There exists an S6 layer that solves KEEP n-TH on input augmented with time Positional Encoding.
+Proof. To memorize the n-th position of a piecewise-constant signal x(s) = Pt
+i=1 xi1[i−1,i)(s), it suffices to represent
+two Heaviside functions h1 = H(s −n), h2 = H(s −(n −1)) (recall H(s −n) := 1s>n), by noting that h1 −h2 is one
+at the interval [n −1, n) and zero elsewhere, we have ⟨x, h1 −h2⟩= xn, as desired.
+14
+Understanding Selectivity in Mamba
+As shown in (22), the Mamba basis function can represent any Heaviside function. Specifically, we can let w∆→−∞, and
+∆1([xt; t]) = SoftPlus(w∆t −w∆n) =
+(
+∞
+t < n
+0
+t ≥n ,
+(32a)
+∆2([xt; t]) = SoftPlus(w∆t −w∆(n −1)) =
+(
+∞
+t < n −1
+0
+t ≥n −1 .
+(32b)
+Suppose λ ≡1, B = 1 in the Mamba basis function (8). Using the above ∆1, ∆2, we can obtain the Mamba basis functions
+representing the desired Heavisides,
+gM
+1(s; t, x) = e−
+R t
+s ∆1(x(r)) dr
+w∆→−∞
+−−−−−−→H(s −n).
+(33a)
+gM
+2(s; t, x) = e−
+R t
+s ∆2(x(r)) dr
+w∆→−∞
+−−−−−−→H(s −(n −1)).
+(33b)
+15
+Understanding Selectivity in Mamba
+B. Sensitivity of Mamba
+In this section, we prove Lem. 1 and 2. These follow directly from the general sensitivity formula (11), which we derive in
+more details below: Given a generic, input-dependent recurrence relationship as in (4), we have that the sensitivity of the
+state at time t with respect to its input sequence at the j-th instant xj ∈R is given by
+∂ht
+∂xj
+=
+∂
+∂xj
+ 
+t
+X
+s=1
+ 
+tY
+r=s+1
+Λr
+!
+Bsxs
+!
+=
+t
+X
+s=1
+"
+∂
+∂xj
+ 
+tY
+r=s+1
+Λr
+!
+Bsxs +
+ 
+tY
+r=s+1
+Λr
+!
+∂
+∂xj
+ Bsxs
+
+#
+=
+t
+X
+s=1
+
+
+∂Λj
+∂xj
+
+
+
+
+tY
+r=s+1,
+r̸=j
+Λr
+
+
+
+Bsxsδs<j +
+ 
+tY
+r=s+1
+Λr
+!
+∂
+∂xj
+ Bsxs
+
+
+
+=
+
+
+tY
+r=j+1
+Λr
+
+∂
+∂xj
+ Bjxj
+
++
+j−1
+X
+s=1
+∂Λj
+∂xj
+
+
+
+
+tY
+r=s+1,
+r̸=j
+Λr
+
+
+
+Bsxs
+=
+
+
+tY
+r=j+1
+Λr
+
+
+ 
+∂
+∂xj
+ Bjxj
+
++ ∂Λj
+∂xj
+j−1
+X
+s=1
+ j−1
+Y
+r=s+1
+Λr
+!
+Bsxs
+!
+.
+(34)
+Since Λr = −diag([λ1(r), . . . , λn(r)]) is diagonal and Bj = [B1(j), . . . , Bn(j)], we obtain from (34) the sensitivity of
+the n-th component of the hidden state ht,n ≡ht with respect to the input xj as
+∂ht
+∂xj
+=
+
+
+tY
+r=j+1
+λn(r)
+
+
+ 
+∂
+∂xj
+(Bn(j) xj) + ∂λn(j)
+∂xj
+j−1
+X
+s=1
+ j−1
+Y
+r=s+1
+λn(r)
+!
+Bn(s) xs
+!
+.
+(35)
+With these ingredients, we are now ready to prove the main results in this section.
+Lemma 1.
+Consider the hidden states arising from the S4D and S6 SSMs defined in (6) and (7). The sensitivity of the n-th
+component of their states at time t with respect to the input at time j ≪t is given by, respectively,
+
+∂hS4D
+t
+∂xj
+ = ˜c(λn, Bn, x≤j) e−λn(t−(j+1)),
+
+∂hM
+t
+∂xj
+ = ˜c(∆, λn, Bn, x≤j) e−λn
+Pt
+r=j+1 ∆(xr),
+where ˜c(∆, λn, Bn, x≤j) depends on the input subsequence x≤j, independent of the sequence length t.
+Proof. Recall the Mamba discretization (5) chooses input-dependent SSM parameters as
+λn(r) = e−λn∆(xr),
+Bn(j) = Bn(xj)∆(xj).
+(36)
+Substituting (36) to (35), we see that the first factor becomes
+tY
+r=j+1
+λn(r) = e−λn
+Pt
+r=j+1 ∆(xr),
+(37)
+while the second factor becomes
+∂
+∂xj
+(Bn(j) xj) + ∂λn(r)
+∂xj
+j−1
+X
+s=1
+ j−1
+Y
+r=s+1
+λn(r)
+!
+Bn(s) xs
+= ∂
+∂xj
+(Bn(xj) ∆(xj) xj) −λe−λ∆(xj) ∂∆(xj)
+∂xj
+j−1
+X
+s=1
+e−λn
+Pj−1
+r=s+1 ∆(xr)Bn(xs) ∆(xs) xs.
+(38)
+16
+Understanding Selectivity in Mamba
+We are interested in the behavior of the sensitivity for j fixed and t →∞(i.e., the sensitivity of the current state with respect
+to early input in long-range sequences). Notice that the second factor does not scale with t (since j is fixed), and can be
+bound in terms of the parameters defining the transformations B(x) and ∆(x), as well as λn and x, as such:
+|(38)| ≤˜c(Bn, ∆, λn, x≤j).
+(39)
+On the other hand, the first factor in (37) shows in general exponential dependence on t. Putting both together, we have
+
+∂hM
+t
+∂xj
+ ≤˜c(∆, λn, Bn, x≤j) e−λn
+Pt
+r=j+1 ∆(xr).
+(40)
+The proof for S4D is immediate by taking ∆(xt) = 1, Bn(xt) = Bn for all t, resulting in
+
+∂hS4D
+t
+∂xj
+ ≤˜c(λn, Bn, x≤j) e−λn(t−(j+1)).
+(41)
+Lemma 2.
+Consider the discrete-time S6 in (7) where Bt = [B1(xt), . . . , Bn(xt)]⊤∈RN. Suppose there exists a
+constant c ≥0 such that
+lim
+t→∞λn
+t
+X
+r=1
+∆(xr) ≤c.
+(12)
+Then the sensitivity of the n-th component of the state at time t with respect to any input xj is lower bounded by
+lim
+t→∞
+
+∂hM
+t
+∂xj
+ ≥e−c
+
+∂
+∂xj
+Bn(xs) ∆(xs) xs
+ .
+(13)
+Proof. Recall for the scalar input sequence, each component of the Mamba hidden state is given by
+hM
+t =
+t
+X
+s=1
+e−λn
+Pt
+r=s+1 ∆(xr) Bn(xs) ∆(xs) xs.
+(42)
+Then the condition in (12) implies
+lim
+t→∞hM
+t ≥
+t
+X
+s=1
+e−cBn(xs) ∆(xs) xs.
+(43)
+Straightforward computation of limt→∞
+ ∂hM
+t
+∂xj
+ completes the proof.
+For comparison, we provide a similar sensitivity analysis for the softmax Attention layer as well.
+Proof of Sensitivity of Softmax Attention.
+∂yAttn
+t
+∂xj
+=
+∂
+∂xj
+ 
+t
+X
+s=1
+extW ⊤
+Q WKxs
+Pt
+r=1 extW ⊤
+Q WKxr WV xs
+!
+=
+extW ⊤
+Q WKxj(xtW ⊤
+Q WKWV xj + WV )
+Pt
+r=1 extW ⊤
+Q WKxr
+−
+extW ⊤
+Q WKxjxtW ⊤
+Q WK
+Pt
+r=1 extW ⊤
+Q WKxr2
+t
+X
+s=1
+extW ⊤
+Q WKxsWV xs
+=
+extW ⊤
+Q WKxj
+Pt
+r=1 extW ⊤
+Q WKxr
+ 
+xtW ⊤
+Q WKWV xj + WV −xtW ⊤
+Q WK
+Pt
+s=1 extW ⊤
+Q WKxsWV xs
+Pt
+r=1 extW ⊤
+Q WKxr
+!
+=
+extW ⊤
+Q WKxj
+Pt
+r=1 extW ⊤
+Q WKxr
+ 
+WV + xtW ⊤
+Q WK
+ 
+WV xj −
+Pt
+s=1 extW ⊤
+Q WKxsWV xs
+Pt
+r=1 extW ⊤
+Q WKxr
+!!
+.
+(44)
+17
+Understanding Selectivity in Mamba
+Even in this case, the second term can be bound by a constant C in terms of ∥WQ∥, ∥WK∥, ∥WV ∥and ∥x∥(notice that
+the rightmost term, where a fraction of two sums over t appear, behaves as a weighted average of WV xs, and hence does
+not scale with t). Only the denominator at the first factor remains as a function of t, providing
+
+∂hAttn
+t
+∂xj
+ ≤C 1
+t
+
+min
+r
+extW ⊤
+Q WKxr−1
+.
+(45)
+18
+Understanding Selectivity in Mamba
+C. Proofs of Section 5
+C.1. Proofs of Mamba Solving the MQAR Task
+The MQAR Task
+As a reminder, the MQAR task receives an input in the form
+x = [k1 v1 . . . ki vi . . . kκ vκ
+|
+{z
+}
+κ key-value pairs
+| v× . . . v× ki1 v× . . . v× kij v× . . . v× kiκ v× . . .
+|
+{z
+}
+shuffled queries (=keys), interwoven with noise
+] ∈RT ,
+(46)
+where the keys ki are randomly taken from a key set of size κ, and the values vi and the various noise tokens v× are
+randomly taken from a vocabulary of size |V |. The goal is to output a sequence that, at the location of each query, reports
+the value matching the corresponding key, that is
+y = [× . . . × | × . . . × vi1
+× . . . × vij
+× . . . × viκ
+× . . . ×],
+(47)
+while the other components of the output (denoted with ×) are ignored.
+For the rest of the proofs, we often make use of the Johnson-Lindenstrauss (JL) Lemma to reduce the embedding dimension-
+ality. For completeness, we state and prove JL lemma below.
+Lemma 4 (JL Lemma). Given a set of standard bases {e1, . . . , ed} and ϵ ∈(0, 0.5), there exists a random projection
+matrix M : Rd →Rp where p = O(ϵ−2 log d), Mi,j
+i.i.d.
+∼
+1
+√p Unif{±1} such that for all pairs (i, j),
+|⟨Mei, Mej⟩| ≤ϵ.
+(48)
+Proof. Let √pMi,j := Zi,j, where Zi,j is the symmetric Bernoulli variable. For any i, j ∈[d], we have
+⟨Mei, Mej⟩= ⟨M[:,i], M[:,j]⟩= 1
+p
+p
+X
+l=1
+Zl,iZl,j ≡1
+p
+p
+X
+l=1
+Zl,
+where the last equality follows from the fact that the product of two independent Bernoulli variables is Bernoulli. In other
+words, the dot product of the two projected vectors is a sum of k i.i.d. symmetric Bernoullis. By Hoeffding’s inequality (e.g.
+Vershynin (2018, Theorem 2.2.2)),
+P
+"
+1
+p
+p
+X
+l=1
+Zl ≥ϵ
+#
+≤exp (−pϵ2
+2 ).
+(49)
+Thus
+P [|⟨Mei, Mej⟩| ≥ϵ] = 2P
+"
+1
+p
+p
+X
+l=1
+Zl ≥ϵ
+#
+≤2 exp (−pϵ2
+2 ).
+(50)
+Therefore, except with probability less than 2 exp (−pϵ2
+2 ), it holds that |⟨Mei, Mej⟩| ≤ϵ. Let p =
+4
+ϵ2 ln d
+δ for some
+δ ∈(0, 1). By a union bound, this holds for all
+ d
+2
+
+pairs of (ei, ej) except with probability
+d
+2
+
+2 exp (−pϵ2
+2 ) < d2 exp (−pϵ2
+2 ) = exp(−2 ln d
+δ ) = δ2.
+(51)
+Since there is a probability grater than 1 −δ2 that |⟨Mei, Mej⟩| ≤ϵ holds for all i, j, this guarantees the existence of such
+M by the probabilistic method.
+Theorem 2.
+There exists a 1-layer Mamba model without gating that solves MQAR with κ pairs using embedding size
+d = O(κ + log |V |), and state size N = κ.
+Proof. The proof is divided into two steps: We first construct a 1-layer Mamba model without gating that solves MQAR
+using standard basis vectors d = O(κ + |V |); based on such construction, we then apply the JL Lemma (Lem. 4) together
+with a shifting trick to complete the proof for d = O(κ + log |V |).
+19
+Understanding Selectivity in Mamba
+Step 1: Construction With d = (κ + O(|V |). We consider one-hot encoding of keys and values. The main idea is to (i) use
+the size-2 convolution to combine key-value pairs and filter out other uninformative pairs (particularly, preserve key-value
+pairs and discard value-value pairs); (ii) use appropriate input-dependent SSM matrices to store and retrieve the key-value
+information in the hidden state; (iii) use the output layer to project to the value embedding subspace. Crucially, we observe
+that the hidden state of Mamba at time t is a d × N matrix (14f). Thus, we leverage this matrix structure such that each
+column of the state corresponds to a given key (N = κ), and holds the value associated with it, that is:
+h = [
+vj1
+|
+vj2
+|
+. . .
+|
+vjκ
+] ∈Rd×N.
+(52)
+We first describe how our proposed solution operates, and then prove that indeed our solution solves the MQAR task exactly.
+• Embedding The task of the embedding layer is to clearly distinguish values and keys. We achieve this by letting it map
+to orthogonal directions: let the embedding dimension be d = |V | + κ, and ei ∈Rd denote the standard basis vector.
+We impose
+ki 7→ki := k · ei,
+and
+vi 7→vi := v · eκ+i
+(53)
+for some parameters k, v > 0.
+• Convolution We use a size-2 convolution to combine information of a key-value pair, as it is essential to the task
+solution. We remind that for a sequence (. . . , xt−1, xt, . . .), the action of the convolution layer with size-2 kernel with
+left padding x0 is given by
+ˆxt = conv(xt−1, xt) := σ (c0 ⊙xt−1 + c1 ⊙xt −b) ,
+x0 := 0,
+(54)
+for certain parameters c0, c1, b ∈Rd and a nonlinearity1 σ = ReLU. For our construction, it suffices to pick
+c0 = c01, c1 = c11, and b = b1, with c0, c1, b > 0. We want such nonlinear convolution to preserve information
+from the (ki, vj) pairs, so we impose c0k > b and c1v > b. We also need to prevent the value in (vi, kj) from getting
+associated to the wrong key, but we want to preserve key information to be able to extract it at retrieval time, so we ask
+c0v ≤b and c1k > b. The (ki, kj) pair represents an edge-case, and we will show later how to deal with this. Finally,
+we want to ignore contributions from (vi, vj) pairs (as they refer to “noise” tokens), but we will delegate this task to
+input-selectivity in the SSM layer. To summarize, we need to satisfy
+c0k > b,
+c1v > b,
+c1k > b,
+c0v ≤b.
+(55)
+A feasible parameter combination satisfying (55) is given by:
+v = 1,
+k = 2,
+c0 = 1,
+c1 = 2,
+and
+b = 1.
+(56)
+Let us show how such nonlinear convolution acts on the four different types of input pairs, under the assumptions (55):
+conv((ki, vj)) = ReLU(c0ki + c1vj −b) = (c0k −b)ei + (c1v −b)eκ+j
+(57a)
+conv((vi, kj)) = ReLU(c0vi + c1kj −b) = (c1k −b)ej
+(57b)
+conv((ki, kj)) = ReLU(c0ki + c1kj −b) = (c0k −b)ei + (c1k −b)ej
+(57c)
+conv((vi, vj)) = ReLU(c0vi + c1vj −b) = (c1v −b)eκ+j.
+(57d)
+• Mamba SSM The SSM layer organizes a hidden state matrix where its columns are indexed by the keys and store
+information of the associated values. To this end, we let
+Λ = 0,
+∆t = 1,
+B(x) = C(x) = [Iκ|0|V |]x ≡Wkx,
+(58)
+where Wk projects the input to the key embedding subspace. Consequently, the SSM layer covers three roles at once:
+1In the original Mamba definition, we have σ ≡SiLU; for ease of illustration we consider instead σ ≡ReLU, but notice that similar
+considerations still hold in this case, in light of the fact that SiLU(x) →ReLU(x) for x →±∞: it suffices then to opportunely scale the
+inputs.
+20
+Understanding Selectivity in Mamba
+1. Ensure that the right key get associated to the right column in the hidden state. This role is covered by the input
+matrix B(x) = WBx. By picking WB = Wk = [Iκ|0|V |], we can see that only keys in the convolved input pair
+are used for populating the hidden state. This choice of the input matrix also ensures that information from (vi, vj)
+pairs does not affect the hidden state.
+2. Propagate information down the sequence without corrupting it (i.e., memorization). The state matrix A(x) can
+take care of this, provided we fix it to the all-one matrix. This can be achieved by prescribing Λ ≡0 in (14a).
+Notice that with this choice, the SSM layer simply performs a cumulative sum ht = Pt
+s=1 ˆxs ⊗Bs.
+3. Retrieve the correct column when needed. This task is taken care of by the output matrix C(x) = WCx. As with
+the input matrix, it suffices to have WC = Wk = [Iκ|0|V |]: also in this case, when an input containing a key is
+encountered, the C(x) matrix will retrieve information only from the column corresponding to that specific key.
+• Output The final output layer simply needs to correctly classify vi as the most likely value from the retrieved vector
+yt. To this end, it suffices to consider
+Wo =
+
+
+v⊤
+1
+...
+v⊤
+|V |
+
+,
+(59)
+as vi will return the maximum scalar product with yt.
+Let us illustrate with a step-by-step example how the above construction yields the required result. Consider a generic input
+sequence x for the MQAR task. Under the embedding layer prescribed in (53), the (embeded) input will be in the form
+x =
+ ki1
+vj(i1)
+ki2
+vj(i2)
+. . .
+kiκ
+vj(iκ)
+v×
+. . .
+kk1
+. . .
+kkκ
+. . . 
+∈Rd×T ,
+(60)
+so that the im-th key is associated to the j(im)-th value. The order in which the keys appear at query time is also random
+and denoted by the km subscript. Moreover, keys at query time are randomly interwoven with value tokens, denoted as v×.
+After convolution, this input gets mapped to
+ˆx =
+
+
+c1,kei1
+c0,kei1
+c1,kei2
+c0,kei2
+. . .
+c1,keiκ
+c0,keiκ
+0
+. . .
+c1,kek1
+. . .
+c1,kekκ
+. . .
++
++
++
++
++
++
++
++
++
+0
+c1,vej(i1)
+0
+c1,vej(i2)
+. . .
+0
+c1,vej(iκ)
+0
+. . .
+0
+. . .
+0
+. . .
+
+,
+(61)
+where we denote c0,k = c0k −b, c1,k = c1k −b, c1,v = c1v −b to slim notation, and separate the components of ˆx into
+key-related (top) and value-related (bottom) for illustrative purposes. Notice how, for the initial part of the input, distinct
+keys (the various eim at the top) are only associated with their respective values (the various ej(im) at the bottom), or with 0.
+Before moving on to the SSM layer, let us remind its action (14f):
+yt =
+
+eΛ⊙(∆t⊗1N) ⊙ht−1 + (∆t ⊙ˆxt) ⊗Bt
+
+Ct =
+t
+X
+s=1
+ t−1
+Y
+m=s
+eΛ⊙(∆m⊗1N) ⊙(ˆxs · B⊤
+s )
+!
+Ct
+Λ≡0,∆m≡1
+========⇒
+yt =
+ ht−1 + ˆxt · B⊤
+s
+
+Ct =
+t
+X
+s=1
+ ˆxs · B⊤
+s
+
+Ct.
+(62)
+Notice how the hidden state naturally admits a matrix structure ht ∈Rd×N due to the outer product xs · B⊤
+s , whose
+columns are updated by xt, where Bs determines which columns are affected. If Bt ∝ei (i.e., only nonzero at component
+i), then xt will contribute to only the i-th column in ht. Similarly, taking Ct ∝ei ensures that only the i-th column from
+the hidden state is retrieved. This is precisely what we achieve with the choice outlined above. In light of this, the hidden
+state after the initial part of the input (where the key-value pairs are listed) admits the following form at time 2κ
+h2κ =
+
+
+ˆke1
+ˆke2
+. . .
+ˆkeκ
++
++
++
+ˆvej(1)
+ˆvej(2)
+. . .
+ˆvej(κ)
+
+,
+with
+ˆk = c2
+1,k + c2
+0,k,
+ˆv = c1,vc0,k,
+(63)
+and remains unchanged until the first key kk1 is encountered at query time, as B(x) = B((vi, vi)) = 0 for all the tokens
+in between. For each key ki encountered at query time, C(x) then takes care of extracting the corresponding i-th column of
+21
+Understanding Selectivity in Mamba
+h, which holds a vector proportional to the embedding of its associated value, ej(i). Finally, the output matrix computes
+scalar products of all the values embedding with the extracted vector, which will then be maximum for ej(i), thus accurately
+solving the MQAR task.
+There is an edge case to this construction, which occurs when, at retrieval time, two keys appear adjacent to each other in a
+key-key pair (ki, kl). In this case, kl represents the actual query, while ki acts as noise: the convolution will in fact contain
+information from two keys, implying that C(x) will have two nonzero components at that point. However, with the correct
+parameter choice, we can have the query information dominate the noise, and still recover the desired solution. We have by
+(57c)
+C(conv(ki, kl)) = (c0k −b)ei + (c1k −b)el.
+(64)
+When tested against the hidden state at that instant, then, the output matrix will return a linear combination of the values
+associated to the two keys:
+C(conv(ki, kl)) ht = (c0k −b)
+
+ˆkei + ˆvej(i)
+
++ (c1k −b)
+
+ˆkel + ˆvej(l)
+
+.
+(65)
+To ensure the key-value pair of kl dominates that of ki, we need to impose
+c0k −b ≪c1k −b
+⇐=
+c0 ≪c1,
+(66)
+which is already satisfied by the parameter choice (56).
+Step 2: Dimensionality Reduction to d = O(κ + log |V |). Having proved the construction with d = O(κ + |V |), we now
+apply JL Lemma to reduce the embedding dimension and suitably adjust the Mamba architecture weights to ensure the
+desired output. Concretely:
+• Embedding We use the same key embeddings as above {e1, . . . , eκ} while reducing the value embedding dimen-
+sionality to satisfy almost-orthogonality. By JL Lemma (c.f. Lem. 4), given the value embeddings {ej}|V |+κ
+j=1+κ and
+ϵ ∈(0, 0.5), there exists Mv : R|V | →Rp where p = O(log |V |) and each of its entry is in {−1
+√p,
+1
+√p} such that
+⟨Mvej1, Mvej2⟩≤ϵ for any j1 ̸= j2. Let M := Iκ ⊕Mv ∈R(κ+p)×(κ+|V |) be the direct sum of the identity matrix
+preserving the one-hot key embeddings and the JL matrix projecting the value embeddings. Let the normalized value
+embedding be ¯vj := Mej Let the shifted value embedding be
+vj := Mej + β[0κ|1p]⊤=
+p
+X
+i=1
+(Mi+κ,j + β)ei+κ ∈Rκ+p,
+(67)
+where each component of vj is in the range [−1
+√p + β,
+1
+√p + β] ≡[vmin, vmax]. Note that by letting β > −1
+√p, we
+can ensure all components of vj are nonnegative.
+• Convolution We use a size-2 convolution as (54), to retain the value from (ki, vj) pairs and discard the value from
+(vi, kj) pairs. Ideally we want
+conv(ki, vj) := ReLU(c0ki + c1vj −b) ∝(c0 −b)ki + (c1 −b)vj
+(68a)
+conv(vi, kj) := ReLU(c0vi + c1kj −b) ⊥span({v1, . . . , v|V |}).
+(68b)
+Given the shifted value embeddings, we must impose the following constraints to achieve (68):
+c0k > b,
+c1vmin > b,
+c0vmax ≤b.
+(69)
+A feasible parameter combination satisfying (69) is given by
+β = 2 ( =⇒[vmin, vmax] ⊆[1, 3] since p ≥1),
+k = 10,
+c0 = 1,
+c1 = 10,
+and
+b = 3.
+(70)
+Consequently, we have the desired convolution outputs
+conv(ki, vj) = (c0k −b)ei +
+p
+X
+i=1
+(c1(Mi+κ,j + β) −b) ei+κ = (c0k −b)ei + c1¯vj + (c1β −b)
+p
+X
+i=1
+ei+κ
+|
+{z
+}
+:=s
+(71a)
+conv(vi, kj) = (c1k −b)ej.
+(71b)
+22
+Understanding Selectivity in Mamba
+Note that the edge case for conv(ki, kj) is taken care of since c0 ≪c1, while the (vi, vj) pairs will be ignored in the
+SSM layer, following the same argument as in step 1.
+• Mamba SSM The SSM layer is the same as in step 1 (58), propagating information through the hidden state (c.f. (63)).
+At the query time for key ki, i = 1, . . . , κ, the output yt =
+ (c0k −b)2 + (c1k −b)2
+ei + (c0k −b)
+ c1¯vj(i) + s
+
+contains the (scaled) normalized value embedding shifted by a constant vector s.
+• Output The output layer undoes the shift and classifies based on the normalized value embeddings. Recall Mv ∈
+R|V |×p is the JL matrix from the value embedding projection. We set the output linear layer with the weight matrix
+Wo = [0|M ⊤
+v ] ∈R|V |×(κ+p) and the bias vector bo = −(c0k −b)Wos. The final output is given by
+Woyt + bo = (c0k −b)Wo
+ c1¯vj(i) + s
+
+−(c0k −b)Wos = (c0k −b)c1M ⊤
+v Mvej(i),
+(72)
+which yields the maximum at component j(i) since ⟨Mvej(i), Mvel⟩≤ϵ for any l ̸= j(i) by JL Lemma. This
+completes the proof.
+Theorem 3.
+There exists a 1-layer Mamba-2 model without gating that solves MQAR with κ pairs using embedding size
+d = O(log κ + log |V |), and state size N = log κ.
+Proof. The idea is to execute the Mamba solution outlined in the proof of Thm. 2, but in a leaner manner due to the
+additional degrees of freedom in Mamba-2: particularly, we leverage the fact that the convolutions for the value (14b),
+key (14d), and query (14e) can be chosen independently (instead of using the same convolution in Mamba). The proof is
+divided into two steps: We first present the construction using standard basis vectors with d = κ + |V |; We then reduce the
+embedding dimension by applying JL lemma.
+Step 1: Construction With d = O(κ + |V |).
+• Embedding - Same as Mamba The role of the embedding layer is to clearly distinguish values and keys. We achieve
+this by letting it map to independent directions: let the embedding dimension be d = |V | + κ, and ei ∈Rd denote the
+standard basis vector. We let
+ki 7→ki := ei,
+and
+vi 7→vi := eκ+i.
+(73)
+• Convolution Differently from Mamba that uses the same convolution kernel to compute the SSM input u and
+parameters B, C, Mamba-2 has the additional flexibility of using three independent convolutions for computing
+u, B, C (see details in Tab. 2). We now exploit this flexibility by setting:
+ˆxB
+t = convB(xt−1, xt) = σ(c0 ⊙xt−1 + c1 ⊙xt −b) := xt−1,
+ˆxt = convu(xt−1, xt) := xt,
+ˆxC
+t = convC(xt−1, xt) := xt.
+(74)
+Consequently, the output from convB shifts the input sequence to the right by one position, whereas the outputs from
+convu, convC are the same as the input.
+• Mamba-2 SSM - Same as Mamba The role of the SSM layer is to associate key-value pairs, propagate information
+through the state, and retrieve the correct value given a query(=key). Unlike Thm. 2, the convolved input (74) contains
+only key or value information but never mixes them. A simple choice is to set B, C as the identity matrices, but this
+requires the state size be the same as the embedding size N = d. To further reduce the state size to N = κ, we use the
+same choice as Mamba (58) by letting
+λ = 0, B(xt) = C(xt) = [Iκ|0|V |]xt ≡Wkxt,
+(75)
+• Output - Same as Mamba Even in this case, as a classifier it suffices to pick
+Wo =
+
+
+v⊤
+1
+...
+v⊤
+|V |
+
+.
+(76)
+23
+Understanding Selectivity in Mamba
+With the definitions above, we can simplify the outcome of the Mamba-2 layer application. This in fact reduces to
+yt =
+t
+X
+s=1
+ ˆxs B(ˆxB
+s )⊤
+C(ˆxC
+s ) =
+t
+X
+s=1
+ xs (Wkxs−1)⊤
+Wkxt =
+t
+X
+s=1
+xs(x⊤
+s−1W ⊤
+k Wkxt)
+(77)
+where x0 = 0 is the zero padding vector. Note that the output yt for t ≥2κ contains the desired key-value association,
+xs(Wkxs−1)⊤= vj(i)k⊤
+i for s = 2, 4, . . . , 2κ.
+At query time where xt = ki, thanks to our construction of the Embedding layer, ⟨ki, xs−1⟩= 0 for all s, except when
+xs−1 = ki: in that case we have instead ⟨ki, xs−1⟩= 1. Whatever the index s −1 at which this occurs, the associated
+value xs is precisely the one we are seeking, i.e., the value embedding vj(i) immediately following the key matching the
+corresponding query ki. Thus, yt = vj(i). Now, applying the output matrix amounts to computing scalar products between
+vj(i) and all possible value vectors, which will return 1 only at the desired value per the orthogonal embedding construction.
+Step 2: Dimensionality Reduction to d = O(log κ + log |V |). We now reduce the embedding dimension d = |V | + κ to
+d = O(log |V | + log κ). To this end, we apply JL Lemma (c.f. Lem. 4) to construct nearly orthogonal embedding vectors,
+while keeping the convolution, SSM, and output layers the same as step 1. By JL lemma, fixed ϵ ∈(0, 0.5), there exists a
+matrix M ∈Rd×p for p = O(log d) such that |⟨Mei, Mej⟩| ≤ϵ for all i, j ∈[d]. We apply JL lemma separately for the
+key embedding subspace (with a JL matrix Mk ∈Rlog κ×κ) and the value embedding subspace (with another JL matrix
+Mv ∈Rlog |V |×|V |). We collect the final JL matrix via a direct sum, M = Mk ⊕Mv. Let ki := Mei, vj := Meκ+j.
+Then for i ̸= j, we have ⟨ki, kj⟩≤ϵ, ⟨vi, vj⟩≤ϵ. On the other hand, ⟨kj, kj⟩= Pp
+i=1 M 2
+i,j ≈1. Similarly, we see that
+⟨vj, vj⟩≈1. It remains to show such low-dimensional embeddings, followed by convolutions, SSM, and output layer,
+yields the desired solution. The action of the convolution layer on the low-dimensional embeddings is the same as in step 1,
+shifting the attention-keys by one position to the right while keeping the attention-queries and attention-values unchanged.
+Also the action of the SSM layer is the same as step 1 (77), where the hidden state is a sum of key-value association matrices
+vj(i)k⊤
+i , except with embedding dimension O(log |V | + log κ). At query time, upon encountering ki, the retrieved output
+is yt ∝vj(i) + ϵ(P
+l̸=j(i) vl) for ϵ ≪1, in light of the fact that the low-dimensional embeddings are nearly orthogonal by
+construction. Then, applying the output matrix Woyt yields the maximum component at j(i), as desired.
+Remark 7. The above construction with N = log κ works for generic inputs where the values are drawn randomly from
+the vocabulary with sufficient size. Such construction may fail in the adversarial case where most values are the same and
+the number of keys κ is large. Concretely, suppose the input is [k1, v1, k2, v, . . . , kκ, v], such that all the values at time
+t = 4, 6, . . . , 2κ are the same token v, and v1 ̸= v. Then at the retrieval time for the query token k1, the signal value is v1,
+whereas the noisy values from other keys contribute to ϵ(κ −1)v. Then if ϵ(κ −1) > 1, the model might fail to retrieve the
+desired value. This can be counteracted by decreasing ϵ; as per JL Lemma, though, this might come at the cost of scaling
+the embedding dimension — without however impacting its logarithmic behavior (remember p = O(ϵ−2 log d)).
+Theorem 4.
+There exists a 1-layer Mamba model with an S4D mixer that solves MQAR with κ pairs, using embedding
+size d = O(κ log |V |), and state size N = 1.
+Proof. The proof is divided into two steps: we first construct a 1-layer Mamba model using S4D as SSM layer, that solves
+MQAR using d = O(κ|V |); we then apply JL Lemma with a shifting trick to complete the proof for d = O(κ log |V |).
+Step 1: Construction With d = O(κ|V |). On a high level, the idea is to organize the hidden state of the SSM in chunks,
+each collecting a vector representing the value associated to a specific key, similarly to the proof in Thm. 2. However, unlike
+the Mamba layer, the S4D layer does not have access to input-dependent matrices B(x), C(x), implying that the N columns
+of the S4D state are the same up to scaling, and hence cannot encapsulate additional information regarding the input. We
+then decide to work with a single-column as hidden state, and instead partition it along the embedding dimension d. Ideally,
+we want the hidden state before retrieval to be a long column vector,
+ht = [
+v⊤
+1
+|
+v⊤
+2
+|
+. . .
+|
+v⊤
+κ
+]⊤∈Rκ|V |.
+(78)
+This can be achieved by specifying each component of the full Mamba architecture as follows.
+• Embedding The goal of the embedding layer is to organize keys and values in a form that is suitable to assemble a
+24
+Understanding Selectivity in Mamba
+hidden state as in (78). More in detail, we let a key ki and a value vi be mapped to, respectively
+ki 7→ki = k · [0, . . . , 0|
+. . .
+|
+1, . . . , 1
+|
+{z
+}
+|V |i:|V |(i+1)
+|
+. . .
+|0, . . . , 0| . . . ]⊤
+(79)
+vi 7→vi = v · [0, . . . , 1
+|{z}
+i
+, . . . , 0|
+. . .
+|0, . . . ,
+1
+|{z}
+κ|V |+i
+, . . . , 0]⊤
+(80)
+= v · [
+e⊤
+i
+|
+. . .
+|
+e⊤
+i
+]⊤,
+(81)
+for some fixed parameters k > 0, v > 0. Notice that, in light of this, any combination ki + vj can form a dictionary: it
+has a maximum value at a component uniquely defined by the pair i, j.
+• Convolution The (short) convolution layer is responsible for filtering out irrelevant information from the sequence, and
+retaining only the one pertaining (ki, vj) pairs. To this end, we limit ourselves to a convolution with kernel size 2: this
+acts on any pair (xt, xt+1) of the input sequence by mapping it to
+(xt, xt+1) 7→σ (c0 ⊙xt + c1 ⊙xt+1 −b) .
+(82)
+By carefully picking the parameters k, v, c0, c1, b, we can ensure that only a (ki, vj) pair “survives” the operation,
+and everything else gets mapped to the null vector. This for example can be achieved by setting k = 10, v = 1, c0 =
+10 · 1, c1 = 1, b = kc0. With this choice, we see that the convolution maps
+(ki, vj) 7→[0, . . . , 0|
+. . .
+|0, . . . ,
+1
+|{z}
+|V |i+j
+, . . . , 0|
+. . .
+|0, . . . , 0]⊤
+(83)
+= [
+0⊤
+|
+. . .
+|
+e⊤
+j
+|
+. . .
+|
+0⊤
+]⊤
+(84)
+(ki, kj) 7→[0, . . . , 0]⊤
+(85)
+(vi, kj) 7→[0, . . . , 0]⊤
+(86)
+(vi, vj) 7→[0, . . . , 0]⊤,
+(87)
+• S4D SSM The SSM layer simply needs to accumulate and propagate the combined values down the sequence. We
+remind that from (5) and (6), the output of S4D is given by
+hS4D
+t
+=
+t
+X
+s=1
+xs ·
+
+Λ
+t−(s+1)Bs
+⊤
+.
+(88)
+We make use of a “trivial” SSM where Λ = B = 1, resulting in a hidden state which, after collecting the initial
+(ki, vj(i)) pairs, is constant in the form:
+ht = [0, . . . , 1
+|{z}
+j1
+, . . . , 0|0, . . . ,
+1
+|{z}
+|V |+j2
+, . . . , 0|
+. . .
+|0, . . . ,
+1
+|{z}
+κ|V |+jκ
+, . . . , 0]⊤
+= [
+e⊤
+j1
+|
+e⊤
+j2
+|
+. . .
+|
+e⊤
+jκ
+]⊤.
+(89)
+• Gate The role of the gating mechanism (14g) is to retrieve the part of the hidden state which refer to the requested key.
+The gate branch acts on a linear transformation of the original sequence: by picking this transformation as the identity.
+we ensure that, when a key is encountered, only the corresponding value is retrieved from the hidden state, in fact:
+˜yt = ki ⊙ht = [0, . . . , 0| . . . |0, . . . ,
+1
+|{z}
+|V |i+j(i)
+, . . . , 0|0, . . . , 0| . . . ].
+(90)
+• Output The final output layer simply needs to test the retrieved vector yt against all values vi: only the correct one
+will return a scalar product different from 0. It suffices to pick
+W S4D
+o
+=
+
+
+v⊤
+1
+...
+v⊤
+|V |
+
+=
+
+
+e⊤
+1
+. . .
+e⊤
+1
+...
+...
+...
+e⊤
+|V |
+. . .
+e⊤
+|V |
+
+.
+(91)
+25
+Understanding Selectivity in Mamba
+Step 2: Dimensionality Reduction to d = O(κ log(|V | + 1)). Having proved the construction with d = O(|V |), we now
+apply JL Lemma to reduce the embedding dimension and suitably adjust the Mamba architecture weights to ensure the
+desired output. Concretely:
+• Embedding We use JL lemma to identify d = |V | + 1 almost-orthogonal vectors within a p ∼O(log(|V | + 1))-
+dimensional space. Namely, there exists a random matrix M : Rd →Rp such that any two (different) vectors in the set
+{Me1, . . . , Me|V |, Me|V |+1} are almost-orthogonal, in the sense that |⟨Mei, Mej⟩| < ϵ for some small ϵ ∈(0, 0.5).
+Without loss of generality, we ensure that the last of these vectors is parallel to the all-one vector 1p: notice this is
+always possible via an opportune rotation, which does not affect the scalar product of the recovered vectors (and hence,
+their almost-orthogonality). We let the embedding layer perform the following map
+ki 7→ki = k · [0, . . . , 0|
+. . .
+| 1, . . . , 1
+|
+{z
+}
+pi:p(i+1)
+|
+. . .
+|0, . . . , 0| . . . ]⊤∈Rκp,
+i = 1 . . . κ
+(92)
+vi 7→vi = [(Mei + β1)⊤|
+. . .
+|(Mei + β1)⊤]⊤∈Rκp,
+i = 1 . . . |V |,
+(93)
+where M : Rd →Rp, Mi,j ∈{−1
+√p,
+1
+√p} is the (rotated) projection matrix recovered with JL Lemma, and β >
+1
+√p,
+so that each component of the value embedding vi is nonnegative, and falls in the range of [β −
+1
+√p, β +
+1
+√p].
+• Convolution We use a size-2 convolution as in step 1, requiring it to retain only the (ki, vj) pair information while
+sending other pairs (vi, kj), (vi, vj), (ki, kj) to zero. To this end, we let
+β = 1,
+k = 10,
+c0 = 10,
+c1 = 1,
+b = kc0.
+(94)
+Note that by the choice of β and p ≥1, the range of components in vi is limited to [0, 2]. Consequently, we have
+conv(ki, vj) = ReLU(c0ki + c1vj −b) = [
+0⊤
+|
+. . .
+|
+(Mej + β1)⊤
+|
+. . .
+|
+0⊤
+]⊤;
+(95)
+conv(vi, kj) = conv(ki, kj) = conv(vi, vj) = 0.
+(96)
+• S4D SSM The SSM layer proceeds similarly as the construction in step 1, yielding the state at t > 2κ as
+ht = [(Mej1 + β1)⊤|(Mej2 + β1)⊤
+|
+. . .
+|(Mejκ + β1)⊤]⊤.
+(97)
+• Gate and Output Also the gating layer and the output layer proceed similarly as the construction in step 1. After
+gating, when a key ki is encountered, we have
+ˆyt = ht ⊙ki = ·[0, . . . , 0|
+. . .
+| (Meji + β1)⊤
+|
+{z
+}
+pi:p(i+1)
+|
+. . .
+|0, . . . , 0| . . . ]⊤.
+(98)
+And finally, after applying the output matrix, we obtain
+W S4D
+o
+ˆyt =
+
+
+(Me1)⊤
+. . .
+(Me1)⊤
+...
+...
+...
+(Me|V |)⊤
+. . .
+(Me|V |)⊤
+
+
+
+
+0
+...
+(Meji + β1)
+...
+0
+
+
+≈
+
+
+ϵ + ϵβ
+...
+1 + ϵβ
+...
+ϵ + ϵβ
+
+
+,
+(99)
+in light of the fact that both (Mei)⊤· Mej ≈ϵ if i ̸= j otherwise (Mei)⊤· Mei ≈1 per JL construction, and
+(Mei)⊤· 1 ≤ϵ per the assumption that Me|V |+1 is parallel to 1p. This allows us to recover the correct value,
+completing the proof.
+26
+Understanding Selectivity in Mamba
+C.2. Proofs of Mamba Solving the INDUCTION HEADS Task
+The INDUCTION HEADS Task
+As a reminder, for the INDUCTION HEADS task, the input is a sequence of tokens
+[x1, . . . , xt] from a finite vocabulary V ; The output is a sequence of tokens [y1, . . . , yt] from the augmented vocabulary
+V ∪{×}, where yi equals the input token right after the latest previous occurrence of the input token xi, i.e., yi = xj(i)+1
+where j(i) = max{j : j < i, xj = xi}; otherwise yi = ×. An example input and output drawn from the vocabulary
+V = {1, 2, 3, 4} with sequence length 8 is shown below:
+t
+= [
+1,
+2,
+3,
+4,
+5,
+6,
+7,
+8]
+x
+= [
+2,
+1,
+3,
+2,
+4,
+3,
+2,
+4]
+y
+= [
+×,
+×,
+×,
+1,
+×,
+2,
+4,
+3]
+.
+Note that the input token 2 appears three times, at instants t = 1, 4, 7. Thus, at t = 7, the latest previous occurrence of
+j(7) = 4, which yields the output y7 = xj(7)+1 = x4+1 = 4.
+Lemma 3.
+There exists a 1-layer Mamba model with the Mamba-∆⊤SSM mixer (15) that solves INDUCTION HEADS
+with vocabulary V using embedding size d = 2|V | and state size N = |V |.
+Proof. We follow a procedure similar to the MQAR construction, in that we leverage the matrix structure in the hidden
+state such that its columns are indexed by the key token and store the associated value token. However, differently from
+the MQAR task, in the INDUCTION HEADS task there is no distinction between the key and value set, but rather all
+tokens are drawn from the same vocabulary V – i.e., each token xi acts as key in the (xi, xi+1) pair, and as value in the
+(xi−1, xi) pair. To resolve this, we use a doubling-embedding trick in Mamba, together with suitable choices of convolution.
+Moreover, the INDUCTION HEADS task requires finding the latest previous occurrence; we will achieve this by leveraging
+the input-dependent state matrix.
+The main idea is to double the embedding size in Mamba, which enables the convolution layer to perform concatenations of
+the adjacent embedding pairs. Concretely: we let the state size N = |V |, and the embedding size d = 2|V |. We design the
+architecture as follows.
+• Embedding We use 2|V |-dimensional standard basis vectors to embed the vocabulary V = {1, 2, . . . , |V |}, i.e.,
+vi 7→
+evi
+evi
+
+∈Rd ≡R2|V |.
+(100)
+• Convolution We use size-2 convolution (with left-padding 0) combining the pair (xi−1, xi) by summing the first
+|V |-dimensions of xi−1 with the last |V |-dimensions of xi, effectively concatenating (exi−1, exi). We let
+ˆxi ≡conv(xi−1, xi) = c0 ⊙xi−1 + c1 ⊙xi,
+where c0 =
+ 1
+0
+
+, c1 =
+ 0
+1
+
+.
+(101)
+Note that we describe the proof for linear convolution here to simplify notation, but it holds also for nonlinear
+convolution (14b), noting that each embedding vector xi and the convolution weights c0, c1 are nonnegative, effectively
+reducing the nonlinearity σ = ReLU (or SiLU) to be the identity map. The same reasoning applies to the design of
+B, C, as we discuss next.
+• Mamba-∆⊤SSM Since the convolved output ˆxi contains xi−1 in its first |V | dimensions and xi in its last |V |
+dimensions, we choose the state matrix Λ and the input matrix B to depend on the first |V | dimensions of ˆx (i.e.,
+extracting the key), and the output matrix C to depend on the last |V | dimensions (i.e., extracting the query). To this
+end, we let Λ = −1 ∈Rd×N, w∆≫0, and
+∆(ˆxi) := SoftPlus(Linear(ˆxi)), where Linear(ˆxi) := w∆[I|V | | 0|V |]ˆxi ∈RN,
+(102a)
+Λ(ˆxi) := eΛ⊙(1d⊗∆(ˆxi)) = e−1⊗∆(ˆxi) ∈Rd×N ≡R|V |×|V |,
+(102b)
+B(ˆxi) := Linear(ˆxi) = [I|V | | 0|V |] ˆxi ∈RN,
+(102c)
+C(ˆxi) := Linear(ˆxi) = [0|V | | I|V |] ˆxi ∈RN.
+(102d)
+27
+Understanding Selectivity in Mamba
+• Output Wo = [0|V | | I|V |] ∈R|V |×d
+We now show the correctness of such construction. Consider the generic input and output sequences:
+t
+= [
+1,
+2,
+3,
+4,
+5,
+6,
+7,
+8, . . .]
+x
+= [
+v2,
+v1,
+v3,
+v2,
+v4,
+v3,
+v2,
+v4, . . .]
+y
+= [
+×,
+×,
+×,
+v1,
+×,
+v2,
+v4,
+v3, . . .].
+(103)
+After the embedding and convolution layers, the SSM input is a sequence of d-dimensional vectors for d = 2|V |,
+ˆx =
+
+0
+ev2
+ev1
+ev3
+ev2
+ev4
+ev3
+ev2
+. . .
+ev2
+ev1
+ev3
+ev2
+ev4
+ev3
+ev2
+ev4
+. . .
+
+∈R2|V |×t,
+(104)
+where ˆxi stores the (xi−1, xi) pair.
+The action of the SSM layer organizes the hidden state matrix of size d × N ≡2|V | × |V | by the input matrix B(ˆxi) taking
+outer-product with ˆxi, followed by retrieving the desired column via the output matrix C(ˆxi). Now by the choice of SSM
+parameters, we have
+ B(ˆx)
+C(ˆx)
+
+=
+
+0
+ev2
+ev1
+ev3
+ev2
+ev4
+ev3
+ev2
+. . .
+ev2
+ev1
+ev3
+ev2
+ev4
+ev3
+ev2
+ev4
+. . .
+
+∈R2|V |×t,
+(105)
+where we stack them together to visualize that B(ˆx) amounts to shifting C(ˆx) to the right by one position, due to the
+design of convB.
+We now verify the desired behavior in the SSM layer. Suppose temporarily the state matrix is Λ = 1 ∈Rd×N. Then the
+hidden state at time s ≤t would be a cumulative sum,
+hs =
+s
+X
+i=1
+ˆxiB(ˆxi)⊤=
+s
+X
+i=2
+exi−1
+exi
+
+e⊤
+xi−1.
+(106)
+Thus, the j-th column of the hidden state matrix would store the sum of all ˆxi where the key B(ˆxi) = xi−1 = ej. Yet
+the INDUCTION HEADS task requires storing the latest associated value only (not all associated values). To this end, we
+leverage the input-dependence of the state matrix, and particularly of ∆(xt). Recall the Mamba-∆⊤layer is given by
+hs = eΛ⊙(1⊗∆(ˆxs)) ⊙hs−1 + ˆxsB(ˆxs)⊤,
+(107)
+ys = hs C(ˆxs).
+(108)
+We design ∆(ˆxt) ∈RN ≡R|V | such that when the input contains the key information, the corresponding key column in
+the state is erased (while the other columns remain the same). Without loss of generality, suppose B(ˆxs) = ej. By the
+definition of B (102c), this implies that [I|V | | 0|V |]ˆxs = ej. By the choice of w∆≫0 and the definition of ∆(102a), we
+have
+∆(ˆxi) = SoftPlus(w∆[Id | 0d]ˆxi) = w∆ej.
+(109)
+Therefore (102b) yields the state matrix as
+Λs = e−1⊗∆(ˆxs) = e−1⊗(w∆ej) = 1 ⊗exp [0, . . . , −w∆
+| {z }
+j
+, . . . , 0]⊤w∆→∞
+=
+1 ⊗(1 −ej) ∈Rd×N,
+(110)
+which has an all-zeros j-th column and all-ones columns elsewhere. Consequently, the j-th column of the hidden state
+hs[:, j] is erased by the action e−1⊗∆(ˆxs) ⊙hs−1, and then updated with the current input containing the latest value by
+the action ˆxs ⊗B(ˆxs), as desired. We remark that such erasure operation is akin to the construction of the S6 layer for
+solving the KEEP n-TH task in Cor. 2, in which we have Mamba approximate a Heaviside by tweaking ∆(xt), so to erase
+information from all tokens before a given one. We also see that such selective erasure works consistently well for long
+sequences when t →∞, since it preserves all other columns (except the j-th one) by setting ∆(us)[l] = 0 for l ̸= j, and
+thereby satisfying the condition in Lem. 2 to avoid sensitivity decay.
+28
+Understanding Selectivity in Mamba
+Finally, the SSM output is given by ys = hsCs = hsexs, which retrieves the xs-th column of the state that stores the
+token immediately after the latest previous occurrence of xs, i.e. ys =
+ exj(s)
+exj(s)+1
+
+. We then apply the output matrix
+Woys = exj(s)+1 to obtain the target value, which completes the proof.
+29
+Understanding Selectivity in Mamba
+D. Additional Experiment Details
+D.1. Training Details
+For all experiments, unless otherwise noted, we train with the Adam optimizer (Kingma & Ba, 2014), for 600 epochs
+using an initial learning rate η = 0.03 and cosine annealing down to η = 1 × 10−6. The training set is composed of 105
+randomly generated samples with a fixed seed and the batch size is 16, which results in up to 3.75 · 106 gradient updates.
+We perform early stopping if the validation loss reaches below 10−6 or if six hours have elapsed since the beginning of
+training. The validation set and test sets have 103 and 105 samples respectively and are generated with the same function but
+using different seeds. Reported accuracies are always obtained from the test set after the last epoch of training.
+D.2. Task KEEP n-TH
+In this section, we provide additional details and ablation of the KEEP n-TH task used for Sec. 4, with experimental set-up
+and partial results reported in Tab. 1.
+Model All the results in Tab. A.1 - Tab. A.4 use 1-layer models. The MAMBA and S4D models (with or without PE) are
+simplified architectures, which consists of embedding layer, SSM layer, and output linear layer, without convolution nor
+gating from the Mamba mixer block. The simplification is intended to investigate the role of the SSM layer alone (i.e. S6
+versus S4D), without confounding factors from other components in the mixer block.
+Experiment Set-up For each input sequence x = (x1, . . . , xT ), we draw xi
+i.i.d
+∼Unif({1, . . . , |V |}) randomly from a
+vocabulary with size |V | = 128. The target output is the n-th token in the input sequence, i.e. yt = xn for n < t ≤T. The
+predicted output at time t = n, . . . , T are taken to compute (cross-entropy) loss for training, and accuracy for evaluation.
+Discussion When equipped with PE, Mamba manages to achieve 100% accuracy on KEEP n-TH, regardless of sequence
+length. This is thanks to its ability to dynamically adjust (via ∆(xt)) for how long the hidden state retains memory of the
+target token (in position n = 5). On the other hand, S4D is lacking such ability, and already fails at the task for T = 20
+(Tab. A.1 and A.2). Then again Transformers do not need to retain memory, as they can look back to the whole sequence at
+each step, in light of their attention mechanism, and have no issue solving the task for any T. When removing PE from
+Mamba, however (Tab. A.3 and A.4), the model loses its way to discriminate the specific token that must be retrieved, and
+performance drops to that of S4D, as expected.
+Table A.1: Ablation on KEEP n-TH: MAMBA+PE, S4D+PE, TRANSFORMERS with varying sequence length T = 10, 20,
+embedding dimension d, and state size N.
+T=10
+T=20
+acc.
+# epch.
+# prm.
+acc.
+# epch.
+# prm.
+MAMBA
+(+PE)
+d=8, N=8
+1.00 (0.00)
+107
+2.2k
+1.00 (0.00)
+37
+2.2k
+d=8, N=32
+1.00 (0.00)
+241
+2.8k
+1.00 (0.00)
+39
+2.8k
+d=8, N=64
+1.00 (0.00)
+161
+3.5k
+1.00 (0.00)
+47
+3.5k
+d=32, N=8
+1.00 (0.00)
+56
+9.2k
+1.00 (0.00)
+15
+9.2k
+d=32, N=32
+1.00 (0.00)
+19
+11.5k
+1.00 (0.00)
+14
+11.5k
+d=32, N=64
+1.00 (0.00)
+88
+14.5k
+1.00 (0.00)
+19
+14.5k
+d=64, N=8
+0.99 (0.00)
+553
+18.7k
+0.99 (0.01)
+208
+18.7k
+d=64, N=32
+1.00 (0.00)
+429
+23.3k
+1.00 (0.00)
+12
+23.3k
+d=64, N=64
+1.00 (0.00)
+345
+29.4k
+1.00 (0.00)
+12
+29.4k
+S4D
+(+PE)
+d=8, N=8
+0.99 (0.00)
+600
+2.1k
+0.43 (0.04)
+600
+2.1k
+d=8, N=32
+0.99 (0.00)
+600
+2.5k
+0.46 (0.05)
+600
+2.5k
+d=8, N=64
+0.99 (0.00)
+600
+3.0k
+0.43 (0.03)
+600
+3.0k
+d=32, N=8
+0.94 (0.00)
+600
+8.7k
+0.72 (0.01)
+600
+8.7k
+d=32, N=32
+0.93 (0.01)
+600
+10.3k
+0.72 (0.01)
+600
+10.3k
+d=32, N=64
+0.93 (0.01)
+600
+12.4k
+0.73 (0.01)
+600
+12.4k
+d=64, N=8
+0.79 (0.00)
+600
+17.5k
+0.14 (0.01)
+600
+17.5k
+d=64, N=32
+0.79 (0.00)
+600
+20.6k
+0.14 (0.00)
+600
+20.6k
+d=64, N=64
+0.79 (0.00)
+600
+24.8k
+0.14 (0.00)
+600
+24.8k
+TRANS-
+FORMER
+l=1, d=16
+1.00 (0.00)
+16
+5.8k
+1.00 (0.00)
+19
+6.0k
+l=1, d=32
+1.00 (0.00)
+12
+15.1k
+1.00 (0.00)
+12
+15.4k
+l=1, d=64
+1.00 (0.00)
+10
+42.3k
+1.00 (0.00)
+9
+42.9k
+30
+Understanding Selectivity in Mamba
+Table A.2: Ablation on KEEP n-TH: MAMBA+PE, S4D+PE, TRANSFORMERS with varying sequence length T = 30, 40, 50,
+embedding dimension d, and state size N.
+T=30
+T=40
+T=50
+acc.
+# epch.
+# prm.
+acc.
+# epch.
+# prm.
+acc.
+# epch.
+# prm.
+MAMBA
+(+PE)
+d=8, N=8
+0.94 (0.04)
+456
+2.2k
+0.85 (0.15)
+325
+2.2k
+0.22 (0.15)
+600
+2.2k
+d=8, N=32
+1.00 (0.00)
+285
+2.8k
+0.58 (0.37)
+416
+2.8k
+0.28 (0.10)
+600
+2.8k
+d=8, N=64
+1.00 (0.00)
+180
+3.5k
+0.59 (0.31)
+420
+3.5k
+0.98 (0.02)
+346
+3.5k
+d=32, N=8
+1.00 (0.00)
+20
+9.2k
+1.00 (0.00)
+50
+9.2k
+1.00 (0.00)
+241
+9.2k
+d=32, N=32
+1.00 (0.00)
+20
+11.5k
+1.00 (0.00)
+21
+11.5k
+1.00 (0.00)
+225
+11.5k
+d=32, N=64
+1.00 (0.00)
+19
+14.5k
+1.00 (0.00)
+23
+14.5k
+1.00 (0.0)
+130
+14.5k
+d=64, N=8
+1.00 (0.00)
+17
+18.7k
+1.00 (0.00)
+164
+18.7k
+0.99 (0.00)
+600
+18.7k
+d=64, N=32
+1.00 (0.00)
+24
+23.3k
+1.00 (0.00)
+66
+23.3k
+0.99 (0.00)
+600
+23.3k
+d=64, N=64
+1.00 (0.00)
+29
+29.4k
+1.00 (0.00)
+226
+29.4k
+0.98 (0.01)
+600
+29.4k
+S4D
+(+PE)
+d=8, N=8
+0.14 (0.04)
+600
+2.1k
+0.03 (0.00)
+600
+2.1k
+0.03 (0.00)
+600
+2.1k
+d=8, N=32
+0.46 (0.05)
+600
+2.5k
+0.15 (0.01)
+600
+2.5k
+0.04 (0.01)
+600
+2.5k
+d=8, N=64
+0.43 (0.03)
+600
+3.0k
+0.13 (0.02)
+600
+3.0k
+0.04 (0.00)
+600
+3.0k
+d=32, N=8
+0.72 (0.01)
+600
+8.7k
+0.09 (0.00)
+600
+8.7k
+0.08 (0.00)
+600
+8.7k
+d=32, N=32
+0.72 (0.01)
+600
+10.3k
+0.09 (0.00)
+600
+10.3k
+0.09 (0.00)
+600
+10.3k
+d=32, N=64
+0.73 (0.01)
+600
+12.4k
+0.09 (0.00)
+600
+12.4k
+0.09 (0.00)
+600
+12.4k
+d=64, N=8
+0.14 (0.01)
+600
+17.5k
+0.09 (0.00)
+600
+17.5k
+0.09 (0.00)
+600
+17.5k
+d=64, N=32
+0.14 (0.00)
+600
+20.6k
+0.10 (0.00)
+600
+20.6k
+0.10 (0.00)
+600
+20.6k
+d=64, N=64
+0.14 (0.00)
+600
+24.8k
+0.09 (0.00)
+600
+24.8k
+0.09 (0.00)
+600
+24.8k
+TRANS-
+FORMER
+l=1, d=16
+1.00 (0.00)
+16
+5.8k
+1.00 (0.00)
+23
+6.3k
+1.00 (0.00)
+17
+6.4k
+l=1, d=32
+1.00 (0.00)
+12
+15.1k
+1.00 (0.00)
+12
+16.0k
+1.00 (0.00)
+13
+16.4k
+l=1, d=64
+1.00 (0.00)
+9
+42.3k
+1.00 (0.00)
+9
+44.2k
+1.00 (0.00)
+9
+44.9k
+Table A.3: Ablation on KEEP n-TH: MAMBA and S4D with varying sequence length T = 10, 20, embedding dimension d,
+and state size N.
+T=10
+T=20
+acc.
+# epch.
+# prm.
+acc.
+# epch.
+# prm.
+MAMBA
+d=8, N=8
+0.20 (0.01)
+600
+2.3k
+0.05 (0.00)
+600
+2.3k
+d=8, N=32
+0.18 (0.03)
+600
+2.9k
+0.05 (0.00)
+600
+2.9k
+d=8, N=64
+0.17 (0.02)
+600
+3.6k
+0.05 (0.00)
+600
+3.6k
+d=32, N=8
+0.21 (0.01)
+600
+9.3k
+0.10 (0.00)
+600
+9.3k
+d=32, N=32
+0.25 (0.03)
+600
+11.6k
+0.11 (0.00)
+600
+11.6k
+d=32, N=64
+0.28 (0.03)
+600
+14.7k
+0.11 (0.00)
+600
+14.7k
+d=64, N=8
+0.19 (0.00)
+600
+18.8k
+0.11 (0.00)
+600
+18.8k
+d=64, N=32
+0.20 (0.00)
+600
+23.4k
+0.11 (0.00)
+600
+23.4k
+d=64, N=64
+0.21 (0.00)
+600
+29.6k
+0.11 (0.00)
+600
+29.6k
+S4D
+d=8, N=8
+0.08 (0.00)
+600
+2.2k
+0.04 (0.00)
+600
+2.2k
+d=8, N=32
+0.08 (0.00)
+600
+2.6k
+0.04 (0.00)
+600
+2.6k
+d=8, N=64
+0.08 (0.00)
+600
+3.2k
+0.04 (0.00)
+600
+3.2k
+d=32, N=8
+0.20 (0.00)
+600
+8.8k
+0.10 (0.00)
+600
+8.8k
+d=32, N=32
+0.20 (0.00)
+600
+10.4k
+0.10 (0.00)
+600
+10.4k
+d=32, N=64
+0.20 (0.00)
+600
+12.5k
+0.10 (0.00)
+600
+12.5k
+d=64, N=8
+0.20 (0.00)
+600
+17.7k
+0.11 (0.00)
+600
+17.7k
+d=64, N=32
+0.20 (0.00)
+600
+20.8k
+0.11 (0.00)
+600
+20.8k
+d=64, N=64
+0.20 (0.00)
+600
+24.9k
+0.11 (0.00)
+600
+24.9k
+31
+Understanding Selectivity in Mamba
+Table A.4: Ablation on KEEP n-TH: MAMBA and S4D with varying sequence length T = 30, 40, 50, embedding dimension
+d, and state size N.
+T=30
+T=40
+T=50
+acc.
+# epch.
+# prm.
+acc.
+# epch.
+# prm.
+acc.
+# epch.
+# prm.
+MAMBA
+d=8, N=8
+0.04 (0.00)
+600
+2.3k
+0.04 (0.00)
+600
+2.3k
+0.03 (0.00)
+600
+2.3k
+d=8, N=32
+0.04 (0.00)
+600
+2.9k
+0.04 (0.00)
+600
+2.9k
+0.03 (0.00)
+600
+2.9k
+d=8, N=64
+0.04 (0.00)
+600
+3.6k
+0.04 (0.00)
+600
+3.6k
+0.03 (0.00)
+600
+3.6k
+d=32, N=8
+0.09 (0.00)
+600
+9.3k
+0.09 (0.00)
+600
+9.3k
+0.08 (0.00)
+600
+9.3k
+d=32, N=32
+0.09 (0.00)
+600
+11.6k
+0.09 (0.00)
+600
+11.6k
+0.08 (0.00)
+600
+11.6k
+d=32, N=64
+0.09 (0.00)
+600
+14.7k
+0.09 (0.00)
+600
+14.7k
+0.08 (0.00)
+600
+14.7k
+d=64, N=8
+0.09 (0.00)
+600
+18.8k
+0.09 (0.00)
+600
+18.8k
+0.09 (0.00)
+600
+18.8k
+d=64, N=32
+0.09 (0.00)
+600
+23.4k
+0.09 (0.00)
+600
+23.4k
+0.09 (0.00)
+600
+23.4k
+d=64, N=64
+0.09 (0.00)
+600
+29.6k
+0.09 (0.00)
+600
+29.6k
+0.09 (0.00)
+600
+29.6k
+S4D
+d=8, N=8
+0.03 (0.00)
+600
+2.2k
+0.03 (0.00)
+600
+2.2k
+0.03 (0.00)
+600
+2.2k
+d=8, N=32
+0.03 (0.00)
+600
+2.6k
+0.03 (0.00)
+600
+2.6k
+0.03 (0.00)
+600
+2.6k
+d=8, N=64
+0.03 (0.00)
+600
+3.2k
+0.03 (0.00)
+600
+3.2k
+0.03 (0.00)
+600
+3.2k
+d=32, N=8
+0.08 (0.00)
+600
+8.8k
+0.09 (0.00)
+600
+8.8k
+0.09 (0.00)
+600
+8.8k
+d=32, N=32
+0.08 (0.00)
+600
+10.4k
+0.09 (0.00)
+600
+10.4k
+0.09 (0.00)
+600
+10.4k
+d=32, N=64
+0.08 (0.00)
+600
+12.5k
+0.09 (0.00)
+600
+12.5k
+0.09 (0.00)
+600
+12.5k
+d=64, N=8
+0.09 (0.00)
+600
+17.7k
+0.09 (0.00)
+600
+17.7k
+0.09 (0.00)
+600
+17.7k
+d=64, N=32
+0.09 (0.00)
+600
+20.8k
+0.09 (0.00)
+600
+20.8k
+0.09 (0.00)
+600
+20.8k
+d=64, N=64
+0.09 (0.00)
+600
+24.9k
+0.09 (0.00)
+600
+24.9k
+0.09 (0.00)
+600
+24.9k
+32
+Understanding Selectivity in Mamba
+D.3. Task MQAR
+Models All the results in Fig. A.2 use 1-layer models. The Mamba and Mamba-2 models explicitly disable the gating branch. This
+simplification is intended to verify our constructions without gating in Thm. 2 and Thm. 3. The Mamba-S4D model retains the full Mamba
+architecture, but only swapping the S6 layer with the S4D layer; not to be confused with the original S4D model proposed in (Gu et al.,
+2022a).
+Experiment Set-up We generate the data described in App. C.1 as follows. For each input sequence of the form
+x = [k1, v1, . . . , kκ, vκ, . . . , | ki1, . . . , ki2],
+we draw the key token ki
+i.i.d
+∼Unif({1, . . . , κ}), and value token vj
+i.i.d
+∼Unif({1, . . . , |V |}). The target output sequence consists of
+masked tokens except at the the query chunk where the input query is a key (e.g., at ki1, ki2 in the example above). We compute loss
+during training (and accuracy for evaluation) only at the query positions, informed from the target output sequence.
+Discussion Here we expand on the results from Fig. 2 in the main text, by reporting the accuracy of Mamba, Mamba-2, and Mamba-S4D
+trained on MQAR for varying model sizes. In Fig. A.2, we sweep over values of the value vocabulary size |V |, to show how our
+theoretical bounds hold while varying this parameter. The bounds are still reasonably tight, and the observations drawn from Fig. 2 still
+hold in this case. The extra caveat (which does not however invalidate our claim) is that by increasing |V | we are making the task more
+difficult to solve, and our training procedure for the simplest Mamba-S4D fails to achieve satisfactory performance for the model sizes
+considered. Notice also that, for Mamba-2, the simplest task κ = 4 can achieve 100% accuracy even below the theoretical curve proposed
+in our theorems. This can be attributed to the following factors. On the one hand, our bounds rely on JL Lemma, which provides only
+asymptotical behaviors which might not be verified in practice for κ so small. On the other hand, it is perfectly feasible that at this regime
+the architecture can recover a more efficient solution than the one theorized.
+Our bound
+100% accuracy
+99% accuracy
+<99% accuracy
+|V | = 256
+S4D
+Model dimension (d)
+4
+8
+16
+32
+16
+32
+64
+128
+256
+MAMBA
+4
+8
+16
+32
+8
+16
+32
+64
+MAMBA-2
+4
+8
+16
+32
+4
+8
+Number of keys (κ)
+|V | = 512
+S4D
+Model dimension (d)
+4
+8
+16
+32
+16
+32
+64
+128
+256
+MAMBA
+4
+8
+16
+32
+8
+16
+32
+64
+MAMBA-2
+4
+8
+16
+32
+4
+8
+Number of keys (κ)
+Figure A.2. Trained models accuracy on MQAR (best of 7 seeds) across κ, and d. For S4D N = 4, for Mamba N = 2 × κ, and for
+Mamba2 N = 8 × ln κ. T = 100 and |V | ∈{256, 512} for all runs.
+With Fig. A.3, we further complement our results by sweeping over values of the N state size parameter. We remind that, according to
+Thm. 2 to 4, our theorized MQAR solutions require a value of at least N = 1, N = κ and N ∼log κ for S4D, Mamba and Mamba-2,
+respectively. Indeed, in Fig. A.3 we observe that varying N does not have a particular impact on the final accuracy of S4D. For Mamba,
+on the other hand, we see that for N < κ the training procedure fails to recover an exact solution to MQAR. Similarly, for Mamba-2, no
+solution is recovered for N < 4 log κ. These results further validate the tightness of our theoretical solutions.
+33
+Understanding Selectivity in Mamba
+Our bound
+100% accuracy
+99% accuracy
+<99% accuracy
+S4D
+N = 1
+Model dimension (d)
+4
+8
+16
+32
+16
+32
+64
+128
+256
+N = 2
+4
+8
+16
+32
+16
+32
+64
+128
+256
+N = 4
+4
+8
+16
+32
+16
+32
+64
+128
+256
+N = 8
+4
+8
+16
+32
+16
+32
+64
+128
+256
+Number of keys (κ)
+MAMBA
+N = 0.5 × κ
+Model dimension (d)
+4
+8
+16
+32
+8
+16
+32
+64
+N = κ
+4
+8
+16
+32
+8
+16
+32
+64
+N = 2 × κ
+4
+8
+16
+32
+8
+16
+32
+64
+N = 4 × κ
+4
+8
+16
+32
+8
+16
+32
+64
+Number of keys (κ)
+MAMBA-2
+N = log κ
+Model dimension (d)
+4
+8
+16
+32
+4
+8
+N = 2 × log κ
+4
+8
+16
+32
+4
+8
+N = 4 × log κ
+4
+8
+16
+32
+4
+8
+N = 8 × log κ
+4
+8
+16
+32
+4
+8
+Number of keys (κ)
+Figure A.3. Trained models accuracy on MQAR (best of 7 seeds) across N, κ, and d. For Mamba and Mamba-2 |V | = 512, while for
+S4D |V | = 256 (as it failed to reach satisfactory accuracy for larger |V |). T = 100 for all runs.
+34
+Understanding Selectivity in Mamba
+D.4. Task INDUCTION HEADS
+Model All the results in Fig. A.2 use 1-layer Mamba that explicitly disables the gating branch. This simplification is intended to verify
+our constructions without gating in Lem. 3.
+Experiment Set-up We generate the data described in App. C.2 as follows. The data generation requires four scalar parameters:
+vocabulary size |V |, sequence length T > 2|V | + 1, hard case probability p ∈[0, 1], and special range ratio γ ∈(0, 0.1]. We first draw
+X ∼Bernoulli(p): if X = 0, we sample from the standard setting, otherwise the hard setting. The standard setting generates the input
+sequence x = (x1, . . . , xT ) by randomly drawing xi
+i.i.d,
+∼V = {1, . . . , |V |} for i = 1, . . . , T. The hard setting is intended to evaluate
+the long-range memorization capability (i.e., placing repeated tokens at the beginning and the end of the sequence), which consists of the
+following steps.
+1. Randomly pick a special token v∗∈V
+2. Generate the input sequence by randomly drawing x = (x1, . . . , xT ) where xi
+i.i.d,
+∼V \ v∗for i = 1, . . . , T
+3. Randomly draw a position from r ∈Unif({1, . . . , γT})
+4. Place the special token v∗at positions r, T −r.
+In the experiments for Fig. 3, we use T = 100, |V | ∈{5, 10, 20, 40}, p = 0.75, γ = 0.1. In Fig. A.4, we further ablate the choice of
+state size N ∈{|V |, 2|V |, 4|V |}.
+Discussion We design the hard setting to better differentiate the capabilities from Mamba and our proposed Mamba-∆⊤. Specifically,
+solving the standard setting of the INDUCTION HEADS task requires memorizing the latest previous occurrence, or forgetting the
+earlier previous occurrences. Note that the input sequence generated from the standard setting consists of many repeated tokens (by the
+requirement T > 2|V | + 1), and the expected time for reappearance of any token is |V |. Thus, for small and medium-size |V |, Mamba
+can solve for these cases by using the state matrix with negative eigenvalues to discount the remote past pairs, and thereby correctly output
+the latest previous occurrence. However, solving the hard setting additionally requires the model to memorize long-range information due
+to the special token (occurring at the beginning part and the end part of the sequence). We see that the Mamba solution with negative
+eigenvalues is at odds with the long-range memorization, as shown in Lem. 1. On the other hand, Mamba-∆⊤can satisfy both selective
+forgetting and long-range memorization via the input-dependence state matrix that erases outdated information specific to the input key,
+while retaining other information in the hidden state, as illustrated in the proof of Lem. 3 (see details in App. C.2).
+Below we expand on the results in Sec. 5.2 by reporting a sweep on the hidden state size N for the models used in the INDUCTION
+HEADS task experiments, complementing the findings shown in Fig. 3.
+Our bound
+100% accuracy
+99% accuracy
+<99% accuracy
+N = |V |
+Model dimension (d)
+5
+10
+20
+40
+80
+2
+4
+8
+16
+32
+64
+128
+N = 2|V |
+5
+10
+20
+40
+80
+2
+4
+8
+16
+32
+64
+128
+N = 4|V |
+5
+10
+20
+40
+80
+2
+4
+8
+16
+32
+64
+128
+Vocabulary size (|V |)
+Figure A.4. Trained models accuracy on INDUCTION HEADS task (best of 5 seeds), varying |V | and d, with N ∈{|V |, 2|V |, 4|V |} (left,
+middle, right). Mamba-∆⊤’s performance (outlined) is equal or better than Mamba’s (filled) and only hits 100% above the theoretical
+bound from Lem. 3 (black).
+35
