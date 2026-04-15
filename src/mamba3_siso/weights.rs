@@ -70,7 +70,11 @@ fn kaiming_uniform(buf: &mut [f32], fan_in: usize, rng: &mut SimpleRng) {
 }
 
 fn inv_softplus(x: f32) -> f32 {
-    if x > 20.0 { x } else { (x.exp() - 1.0).ln() }
+    if x > 20.0 {
+        x
+    } else {
+        (x.exp() - 1.0).ln()
+    }
 }
 
 impl Mamba3Weights {

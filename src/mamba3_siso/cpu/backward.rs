@@ -16,7 +16,7 @@ use super::forward::{simd_sum_sq, softplus};
 use super::scratch::Mamba3Scratch;
 use super::weights::TrainMamba3LayerWeights;
 use crate::ops::blas::sgemm_backward;
-use crate::ops::fast_math::{RMS_NORM_EPS, fast_exp_scalar, fast_tanh};
+use crate::ops::fast_math::{fast_exp_scalar, fast_tanh, RMS_NORM_EPS};
 
 const MAX_DS: usize = 64;
 // MAX_NH_DS removed — d_k_carry now uses Vec to support all valid configs

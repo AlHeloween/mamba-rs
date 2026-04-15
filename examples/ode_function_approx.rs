@@ -14,16 +14,16 @@ use mamba_rs::train::flat::MambaBackboneFlat;
 use mamba_rs::train::forward::forward_mamba_backbone_batched;
 use mamba_rs::train::scratch::{BackwardPhaseScratch, PhaseScratch};
 use mamba_rs::train::weights::{TrainMambaLayerWeights, TrainMambaWeights};
-use mamba_rs::{MambaBackbone, MambaConfig, MambaWeights};
+use mamba_rs::{LRSchedule, MambaBackbone, MambaConfig, MambaWeights, WarmupCosine};
 
 #[cfg(feature = "cuda")]
 use mamba_rs::gpu::inference::GpuMambaBackbone;
 
 const ODE_DIM: usize = 4;
 const INPUT_DIM: usize = ODE_DIM + 1;
-const SEQ_LEN: usize = 360;
-const EPOCHS: usize = 50;
-const LR: f32 = 1e-3;
+const SEQ_LEN: usize = 60;
+const EPOCHS: usize = 80;
+const LR: f32 = 2e-3;
 const SEED: u64 = 42;
 
 fn main() {
@@ -57,10 +57,10 @@ fn main() {
     let (train_inputs, train_targets, test_inputs, test_targets) =
         generate_ode_dataset(SEQ_LEN, 3600);
 
+    let n_train_seq = train_inputs.len() / (SEQ_LEN * INPUT_DIM);
     println!(
         "Training data: {} sequences × {} steps",
-        train_inputs.len() / (SEQ_LEN * INPUT_DIM),
-        SEQ_LEN
+        n_train_seq, SEQ_LEN
     );
     println!(
         "Test data: {} sequences × {} steps",
@@ -69,24 +69,35 @@ fn main() {
     );
     println!();
 
-    println!("Training ({EPOCHS} epochs, lr={LR}):");
+    let schedule = WarmupCosine::new(
+        EPOCHS * n_train_seq / 10,
+        EPOCHS * n_train_seq,
+        LR,
+        LR * 0.1,
+    );
+
+    println!("Training ({EPOCHS} epochs, base lr={LR}):");
+    let mut global_step = 0usize;
     for epoch in 0..EPOCHS {
         let mut epoch_loss = 0.0f32;
-        let n_seq = train_inputs.len() / (SEQ_LEN * INPUT_DIM);
+        let mut n_batches = 0usize;
 
-        for seq_idx in 0..n_seq {
+        for seq_idx in 0..n_train_seq {
+            let lr = schedule.get_lr(global_step);
             let inp_start = seq_idx * SEQ_LEN * INPUT_DIM;
             let inp = &train_inputs[inp_start..inp_start + SEQ_LEN * INPUT_DIM];
             let tgt_start = seq_idx * SEQ_LEN;
             let tgt = &train_targets[tgt_start..tgt_start + SEQ_LEN];
 
-            let (temporal, loss, acts_local) = forward_and_loss(&tw, &dims, inp, tgt);
-            let grads = backward_and_get_grads(&tw, &acts_local, &temporal, tgt, &dims);
-            sgd_step(&mut tw, &grads, LR);
+            let (temporal, loss, _acts) = forward_and_loss(&tw, &dims, inp, tgt);
+            let grads = backward_and_get_grads(&tw, &_acts, &temporal, tgt, &dims);
+            sgd_step(&mut tw, &grads, lr);
             epoch_loss += loss;
+            n_batches += 1;
+            global_step += 1;
         }
 
-        epoch_loss /= n_seq as f32;
+        epoch_loss /= n_batches as f32;
         if (epoch + 1) % 10 == 0 || epoch == 0 {
             println!("  Epoch {:3}: loss = {:.6}", epoch + 1, epoch_loss);
         }
@@ -129,31 +140,25 @@ fn main() {
 }
 
 fn generate_ode_dataset(
-    seq_len: usize,
+    _seq_len: usize,
     total_steps: usize,
 ) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
-    let a: [[f32; 4]; 4] = [
-        [-0.10, 0.02, 0.00, 0.00],
-        [0.00, -0.20, 0.01, 0.00],
-        [0.00, 0.00, -0.05, 0.03],
-        [0.00, 0.00, 0.00, -0.08],
-    ];
-
+    let omega = 0.05f32;
     let mut all_states: Vec<[f32; 4]> = Vec::with_capacity(total_steps);
-    let mut y = [1.0f32, 0.5, -0.25, 0.1];
-    let dt = 0.1f32;
+
+    let mut y = [1.0f32, 0.0, 0.5, 0.0];
+    let dt = 1.0f32;
 
     for _ in 0..total_steps {
         all_states.push(y);
-        let dy = [
-            a[0][0] * y[0] + a[0][1] * y[1] + a[0][2] * y[2] + a[0][3] * y[3],
-            a[1][0] * y[0] + a[1][1] * y[1] + a[1][2] * y[2] + a[1][3] * y[3],
-            a[2][0] * y[0] + a[2][1] * y[1] + a[2][2] * y[2] + a[2][3] * y[3],
-            a[3][0] * y[0] + a[3][1] * y[1] + a[3][2] * y[2] + a[3][3] * y[3],
-        ];
-        for i in 0..4 {
-            y[i] += dt * dy[i];
-        }
+        let y1_new = y[0] + dt * y[1];
+        let y2_new = y[2] + dt * y[3];
+        let y1_dot = -omega * omega * y[0];
+        let y2_dot = -omega * omega * y[2];
+        y[0] = y1_new + dt * y1_dot;
+        y[1] += dt * y1_dot;
+        y[2] = y2_new + dt * y2_dot;
+        y[3] += dt * y2_dot;
     }
 
     let mut inputs = vec![0.0f32; total_steps * INPUT_DIM];
@@ -166,10 +171,12 @@ fn generate_ode_dataset(
         inputs[inp_start + 1..inp_start + 1 + ODE_DIM].copy_from_slice(&all_states[t]);
 
         let y = all_states[t];
-        targets[t] = y[0] * y[0] + y[1] * y[1] - y[2] + 0.5 * y[3].sin();
+        targets[t] = 2.0 * y[0] - 0.5 * y[3];
     }
 
-    let train_end = seq_len;
+    let train_ratio = 0.7;
+    let train_end = (total_steps as f32 * train_ratio) as usize;
+
     let train_inp = inputs[..train_end * INPUT_DIM].to_vec();
     let train_tgt = targets[..train_end].to_vec();
     let test_inp = inputs[train_end * INPUT_DIM..].to_vec();

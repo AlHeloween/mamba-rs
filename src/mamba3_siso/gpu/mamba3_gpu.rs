@@ -1423,15 +1423,15 @@ pub fn gpu_backward_mamba3_layer(
             builder.arg(scratch.d_c_pre_rope.inner_mut()); // dQ_pre [B*T*nh*ds]
             builder.arg(scratch.d_b_pre_rope.inner_mut()); // dK_pre [B*T*nh*ds]
             builder.arg(scratch.d_angle_cumsum.inner_mut()); // dAngles_cumsum
-            // d_scale/d_gamma_par: both output (dScale/dGamma) and input (Scale/Gamma from R1c)
-            // Use raw_ptr for input to avoid borrow conflict
+                                                             // d_scale/d_gamma_par: both output (dScale/dGamma) and input (Scale/Gamma from R1c)
+                                                             // Use raw_ptr for input to avoid borrow conflict
             let scale_in_ptr = scratch.d_scale.raw_ptr(&ctx.stream);
             let gamma_in_ptr = scratch.d_gamma_par.raw_ptr(&ctx.stream);
             builder.arg(scratch.d_scale.inner_mut()); // dScale [B*T*nh]
             builder.arg(scratch.d_gamma_par.inner_mut()); // dGamma [B*T*nh]
             builder.arg(&d_cb_ptr); // dQ_bias [nh*ds] atomicAdd
             builder.arg(&d_bb_ptr); // dK_bias [nh*ds] atomicAdd
-            // Inputs
+                                    // Inputs
             builder.arg(acts.c_biased.inner()); // Q_raw (pre-RoPE, post-bias)
             builder.arg(acts.b_biased.inner()); // K_raw
             builder.arg(&scale_in_ptr); // Scale_in (from R1c, raw ptr)

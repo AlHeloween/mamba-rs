@@ -9,7 +9,7 @@
 use crate::mamba3_siso::config::Mamba3Config;
 use crate::mamba3_siso::state::Mamba3LayerState;
 use crate::mamba3_siso::weights::{Mamba3LayerWeights, Mamba3Weights};
-use crate::ops::fast_math::{RMS_NORM_EPS, fast_exp_scalar, fast_tanh};
+use crate::ops::fast_math::{fast_exp_scalar, fast_tanh, RMS_NORM_EPS};
 use crate::ops::norms::{bcnorm, rms_norm_weighted, rmsnorm_gated};
 
 /// Pre-allocated scratch buffers for Mamba-3 T=1 step.

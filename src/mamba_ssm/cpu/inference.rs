@@ -6,7 +6,7 @@
 //! - [`mamba_step`]: Full backbone: input_proj + N blocks + norm_f.
 
 use crate::config::MambaConfig;
-use crate::ops::fast_math::{RMS_NORM_EPS, fast_exp_inplace, fast_exp_scalar};
+use crate::ops::fast_math::{fast_exp_inplace, fast_exp_scalar, RMS_NORM_EPS};
 use crate::state::MambaLayerState;
 use crate::weights::{MambaLayerWeights, MambaWeights};
 

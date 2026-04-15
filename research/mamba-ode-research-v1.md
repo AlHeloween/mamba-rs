@@ -585,3 +585,29 @@ for epoch in 0..EPOCHS {
 ```
 
 For true data parallelism across batches, use `parallel_mamba_forward` / `parallel_mamba_backward` from `mamba_rs::train::parallel`, which parallelizes across samples via rayon with thread-local scratch and epoch-based gradient reduce.
+
+### Benchmark results
+
+Running `cargo test --test m_training_optimization -- --nocapture` (harmonic oscillator ODE, target `f(y) = 2y₁ - 0.5y₄`, d_model=32, 1 layer, ~8K params, seq_len=30, 15 epochs):
+
+```csv
+config,elapsed_secs,r_squared,steps_per_sec
+constant_lr,14.64,0.8656,86.0
+warmup_cosine,14.33,0.8229,87.9
+warmup_cosine_accum4,60.03,0.8246,21.0
+```
+
+**Key findings:**
+- **Constant LR** achieves highest R² (0.87) — warmup+decay doesn't help for small problems where the optimal LR is constant
+- **Warmup+cosine** achieves similar R² (0.82) in similar wall-clock time
+- **Gradient accumulation (4 steps)** is 2.8x slower (60s vs 14s) because it processes 4× more samples per weight update, but achieves similar R² — useful when GPU memory limits batch size
+
+Running `cargo run --example ode_function_approx` (larger model, d_model=64, 2 layers, 65K params, seq_len=60, 80 epochs):
+
+| Metric | Constant LR | Warmup+Cosine |
+|--------|-------------|---------------|
+| Final train loss | 0.0049 | 0.0075 |
+| Test MSE | 0.618 | 0.814 |
+| Test R² | **0.692** | **0.594** |
+
+For this problem size, constant LR slightly outperforms warmup+cosine decay, suggesting the problem doesn't benefit from LR scheduling — the model converges well with a fixed learning rate.

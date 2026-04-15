@@ -7,10 +7,12 @@
 
 pub mod backward;
 pub mod backward_ops;
+pub mod checkpoint;
 pub mod flat;
 pub mod forward;
 pub mod inference;
 pub mod parallel;
 pub mod scratch;
 pub mod target;
+pub mod truncated;
 pub mod weights;

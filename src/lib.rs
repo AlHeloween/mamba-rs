@@ -25,6 +25,7 @@ pub mod mamba3_siso;
 pub mod mamba_ssm;
 pub mod module;
 pub mod ops;
+pub mod schedule;
 pub mod serialize;
 pub mod state;
 pub mod weights;
@@ -37,16 +38,20 @@ pub mod inference {
 pub mod train {
     pub use crate::mamba_ssm::cpu::backward;
     pub use crate::mamba_ssm::cpu::backward_ops;
+    pub use crate::mamba_ssm::cpu::checkpoint;
     pub use crate::mamba_ssm::cpu::flat;
     pub use crate::mamba_ssm::cpu::forward;
     pub use crate::mamba_ssm::cpu::parallel;
     pub use crate::mamba_ssm::cpu::scratch;
     pub use crate::mamba_ssm::cpu::target;
+    pub use crate::mamba_ssm::cpu::truncated;
     pub use crate::mamba_ssm::cpu::weights;
 
-    // Re-export shared ops that were previously in train/
     pub use crate::ops::blas;
     pub use crate::ops::fast_math;
+    pub use crate::schedule::{
+        ConstantLR, LRSchedule, LinearWarmup, StepDecay, WarmupCosine, WarmupLinear,
+    };
 }
 
 #[cfg(feature = "cuda")]
@@ -56,9 +61,10 @@ pub mod gpu {
 
 pub use config::MambaConfig;
 pub use mamba_ssm::cpu::inference::{
-    MambaLayerScratch, MambaStepScratch, mamba_block_step, mamba_layer_step, mamba_step,
+    mamba_block_step, mamba_layer_step, mamba_step, MambaLayerScratch, MambaStepScratch,
 };
 pub use module::MambaBackbone;
+pub use schedule::{ConstantLR, LRSchedule, LinearWarmup, StepDecay, WarmupCosine, WarmupLinear};
 pub use state::{MambaLayerState, MambaState};
 pub use weights::{MambaLayerWeights, MambaWeights};
 

@@ -31,7 +31,7 @@ pub use cpu::backward::backward_mamba3_layer_batched;
 pub use cpu::dims::Mamba3Dims;
 pub use cpu::flat::{Mamba3FieldOffsets, Mamba3LayerFlat};
 pub use cpu::forward::forward_mamba3_layer_batched;
-pub use cpu::inference::{Mamba3StepScratch, mamba3_layer_step, mamba3_step};
+pub use cpu::inference::{mamba3_layer_step, mamba3_step, Mamba3StepScratch};
 pub use cpu::parallel::{
     invalidate_mamba3_scratch, parallel_mamba3_backward, parallel_mamba3_forward,
 };

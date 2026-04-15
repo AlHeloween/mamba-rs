@@ -5,8 +5,8 @@
 //! - **Training**: per-tensor GpuBuffer (optimizer compatible)
 //! - **Gradients**: flat buffer + GradSlice views (single zero() clears all)
 
-use crate::mamba_ssm::gpu::buffers::{GpuBuffer, GradSlice, WeightSlice};
 use crate::mamba3_siso::config::Mamba3Config;
+use crate::mamba_ssm::gpu::buffers::{GpuBuffer, GradSlice, WeightSlice};
 use std::sync::Arc;
 
 type Stream = Arc<cudarc::driver::CudaStream>;
