@@ -854,3 +854,407 @@ fn test_m3_gradient_accumulation() {
         "gradient accumulation ratio: {ratio:.4} (expected 4.0)"
     );
 }
+
+// ===================================================================
+// GPU/CPU parity tests (require cuda feature + NVIDIA GPU)
+// ===================================================================
+
+#[cfg(feature = "cuda")]
+mod gpu_parity {
+    use super::*;
+    use mamba_rs::gpu::buffers::GpuBuffer;
+    use mamba_rs::gpu::buffers::GradSlice;
+    use mamba_rs::gpu::context::GpuCtx;
+    use mamba_rs::gpu::device::GpuDevice;
+    use mamba_rs::mamba3_siso::gpu::inference::GpuMamba3Backbone;
+    use mamba_rs::mamba3_siso::gpu::kernels::Mamba3Kernels;
+    use mamba_rs::mamba3_siso::gpu::mamba3_gpu::{
+        GpuMamba3BackboneActs, GpuMamba3Dims, GpuMamba3Scratch, gpu_backward_mamba3_backbone,
+        gpu_forward_mamba3_backbone,
+    };
+    use mamba_rs::mamba3_siso::gpu::weights::{GpuMamba3Grads, GpuMamba3Weights};
+
+    fn m3_cfg() -> Mamba3Config {
+        Mamba3Config {
+            d_model: 16,
+            d_state: 4,
+            expand: 2,
+            headdim: 4,
+            ngroups: 1,
+            n_layers: 2,
+            rope_fraction: 0.5,
+            a_floor: 0.0625,
+            is_outproj_norm: false,
+        }
+    }
+
+    fn compare_max_diff(gpu: &[f32], cpu: &[f32], name: &str) -> f32 {
+        let mut max_diff = 0.0f32;
+        let mut max_idx = 0usize;
+        for (i, (g, c)) in gpu.iter().zip(cpu.iter()).enumerate() {
+            let diff = (g - c).abs();
+            if diff > max_diff {
+                max_diff = diff;
+                max_idx = i;
+            }
+        }
+        if max_diff > 1e-4 {
+            eprintln!(
+                "{}: max_diff={:.6} at idx={} (gpu={:.6}, cpu={:.6})",
+                name, max_diff, max_idx, gpu[max_idx], cpu[max_idx]
+            );
+        }
+        max_diff
+    }
+
+    #[test]
+    fn test_m3_gpu_inference_matches_cpu() {
+        let cfg = m3_cfg();
+        let input_dim = cfg.d_model;
+        let batch = 2;
+
+        let cpu_weights = Mamba3Weights::init(&cfg, input_dim, 42);
+
+        // CPU inference
+        let mut cpu_state = Mamba3State::zeros(&cfg);
+        let mut cpu_scratch = Mamba3StepScratch::new(&cfg);
+        let input = vec![0.1f32; batch * input_dim];
+        let mut cpu_output = vec![0.0f32; batch * cfg.d_model];
+
+        let cpu_bb =
+            mamba_rs::module::Mamba3Backbone::from_weights(cfg.clone(), cpu_weights.clone())
+                .unwrap();
+        for b in 0..batch {
+            let inp = &input[b * input_dim..(b + 1) * input_dim];
+            let out = &mut cpu_output[b * cfg.d_model..(b + 1) * cfg.d_model];
+            cpu_bb.forward_step(inp, out, &mut cpu_state, &mut cpu_scratch);
+        }
+
+        // GPU inference
+        let mut gpu_bb = GpuMamba3Backbone::new(0, &cpu_weights, cfg, input_dim, batch).unwrap();
+        let mut gpu_output = vec![0.0f32; batch * gpu_bb.config().d_model];
+        gpu_bb.step(&input, &mut gpu_output).unwrap();
+
+        let max_diff = compare_max_diff(&gpu_output, &cpu_output, "inference output");
+        assert!(
+            max_diff < 1e-3,
+            "GPU vs CPU inference mismatch: max_diff={:.6}",
+            max_diff
+        );
+    }
+
+    #[test]
+    fn test_m3_gpu_cpu_training_forward_parity() {
+        let cfg = m3_cfg();
+        let input_dim = cfg.d_model;
+        let seq_len = 16;
+        let batch = 1;
+
+        let cpu_weights = Mamba3Weights::init(&cfg, input_dim, 42);
+
+        // CPU training forward
+        let di = cfg.d_inner();
+        let ds = cfg.d_state;
+        let nh = cfg.nheads();
+        let hd = cfg.headdim;
+        let ng = cfg.ngroups;
+        let nl = cfg.n_layers;
+        let na = cfg.num_rope_angles().max(1);
+        let ip = cfg.in_proj_out_dim();
+
+        let dims_cpu = Mamba3Dims {
+            batch,
+            d_model: cfg.d_model,
+            d_inner: di,
+            d_state: ds,
+            nheads: nh,
+            headdim: hd,
+            ngroups: ng,
+            in_proj_dim: ip,
+            seq_len,
+            mamba_input_dim: input_dim,
+            n_layers: nl,
+            n_angles: na,
+            a_floor: cfg.a_floor,
+            is_outproj_norm: cfg.is_outproj_norm,
+        };
+
+        let bt = batch * seq_len;
+        let input_data: Vec<f32> = (0..bt * input_dim)
+            .map(|i| (i as f32) * 0.01 - 0.5)
+            .collect();
+
+        let mut cpu_temporal = vec![0.0f32; bt * cfg.d_model];
+        let mut cpu_acts = Mamba3LayerFlat::new(&dims_cpu);
+        let mut cpu_scratch = Mamba3Scratch::new(&dims_cpu);
+        let mut ssm_state = vec![0.0f32; nl * nh * hd * ds];
+        let mut k_state = vec![0.0f32; nl * nh * ds];
+        let mut v_state = vec![0.0f32; nl * nh * hd];
+        let mut a_state = vec![0.0f32; nl * nh * na];
+
+        forward_mamba3_layer_batched(
+            &mut cpu_temporal,
+            &mut cpu_acts,
+            &cpu_weights,
+            &input_data,
+            &mut ssm_state,
+            &mut k_state,
+            &mut v_state,
+            &mut a_state,
+            &mut cpu_scratch,
+            &dims_cpu,
+        );
+
+        // GPU training forward
+        let device = GpuDevice::new(0).unwrap();
+        unsafe { device.context().disable_event_tracking() };
+        let arch = GpuDevice::nvrtc_arch(device.compute_capability);
+        let ctx = GpuCtx::new(&device).unwrap();
+        let m3k = Mamba3Kernels::compile(device.context(), arch).unwrap();
+
+        let dims_gpu = GpuMamba3Dims {
+            batch,
+            d_model: cfg.d_model,
+            d_inner: di,
+            d_state: ds,
+            nheads: nh,
+            headdim: hd,
+            ngroups: ng,
+            in_proj_dim: ip,
+            seq_len,
+            mamba_input_dim: input_dim,
+            n_layers: nl,
+            n_angles: na,
+            a_floor: cfg.a_floor,
+            is_outproj_norm: cfg.is_outproj_norm,
+            use_parallel_scan: false,
+        };
+
+        let gpu_w = GpuMamba3Weights::from_cpu(&ctx.stream, &cpu_weights, &cfg, input_dim).unwrap();
+        let input_gpu = GpuBuffer::from_cpu(&ctx.stream, &input_data).unwrap();
+
+        let mut temporal_gpu = GpuBuffer::zeros(&ctx.stream, bt * cfg.d_model).unwrap();
+        let mut acts_gpu = GpuMamba3BackboneActs::new(&ctx.stream, &dims_gpu).unwrap();
+        let mut scratch_gpu = GpuMamba3Scratch::new(&ctx.stream, &dims_gpu).unwrap();
+        let mut ssm_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * hd * ds).unwrap();
+        let mut k_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * ds).unwrap();
+        let mut v_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * hd).unwrap();
+        let mut a_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * na).unwrap();
+
+        gpu_forward_mamba3_backbone(
+            &ctx,
+            &m3k,
+            &mut temporal_gpu,
+            &mut acts_gpu,
+            &gpu_w,
+            &input_gpu,
+            &mut ssm_gpu,
+            &mut k_gpu,
+            &mut v_gpu,
+            &mut a_gpu,
+            &mut scratch_gpu,
+            &dims_gpu,
+        )
+        .unwrap();
+
+        let gpu_temporal = temporal_gpu.to_cpu(&ctx.stream).unwrap();
+        let max_diff = compare_max_diff(&gpu_temporal, &cpu_temporal, "training forward output");
+        assert!(
+            max_diff < 1e-3,
+            "GPU vs CPU training forward mismatch: max_diff={:.6}",
+            max_diff
+        );
+    }
+
+    #[test]
+    fn test_m3_gpu_cpu_training_backward_parity() {
+        let cfg = m3_cfg();
+        let input_dim = cfg.d_model;
+        let seq_len = 8;
+        let batch = 1;
+
+        let cpu_weights = Mamba3Weights::init(&cfg, input_dim, 42);
+
+        let di = cfg.d_inner();
+        let ds = cfg.d_state;
+        let nh = cfg.nheads();
+        let hd = cfg.headdim;
+        let ng = cfg.ngroups;
+        let nl = cfg.n_layers;
+        let na = cfg.num_rope_angles().max(1);
+        let ip = cfg.in_proj_out_dim();
+
+        let bt = batch * seq_len;
+        let input_data: Vec<f32> = (0..bt * input_dim)
+            .map(|i| (i as f32) * 0.01 - 0.5)
+            .collect();
+
+        // CPU forward + backward
+        let dims_cpu = Mamba3Dims {
+            batch,
+            d_model: cfg.d_model,
+            d_inner: di,
+            d_state: ds,
+            nheads: nh,
+            headdim: hd,
+            ngroups: ng,
+            in_proj_dim: ip,
+            seq_len,
+            mamba_input_dim: input_dim,
+            n_layers: nl,
+            n_angles: na,
+            a_floor: cfg.a_floor,
+            is_outproj_norm: cfg.is_outproj_norm,
+        };
+
+        let mut cpu_temporal = vec![0.0f32; bt * cfg.d_model];
+        let mut cpu_acts = Mamba3LayerFlat::new(&dims_cpu);
+        let mut cpu_scratch = Mamba3Scratch::new(&dims_cpu);
+        let mut ssm_state = vec![0.0f32; nl * nh * hd * ds];
+        let mut k_state = vec![0.0f32; nl * nh * ds];
+        let mut v_state = vec![0.0f32; nl * nh * hd];
+        let mut a_state = vec![0.0f32; nl * nh * na];
+
+        forward_mamba3_layer_batched(
+            &mut cpu_temporal,
+            &mut cpu_acts,
+            &cpu_weights,
+            &input_data,
+            &mut ssm_state,
+            &mut k_state,
+            &mut v_state,
+            &mut a_state,
+            &mut cpu_scratch,
+            &dims_cpu,
+        );
+
+        let mut d_temporal_cpu = vec![1.0f32; bt * cfg.d_model];
+        let mut cpu_grads =
+            mamba_rs::mamba3_siso::cpu::weights::TrainMamba3Weights::zeros(&cfg, input_dim);
+        backward_mamba3_layer_batched(
+            &mut d_temporal_cpu,
+            &cpu_acts,
+            &cpu_weights,
+            &mut cpu_grads,
+            &mut cpu_scratch,
+            &dims_cpu,
+            None,
+        );
+
+        // GPU forward + backward
+        let device = GpuDevice::new(0).unwrap();
+        unsafe { device.context().disable_event_tracking() };
+        let arch = GpuDevice::nvrtc_arch(device.compute_capability);
+        let ctx = GpuCtx::new(&device).unwrap();
+        let m3k = Mamba3Kernels::compile(device.context(), arch).unwrap();
+
+        let dims_gpu = GpuMamba3Dims {
+            batch,
+            d_model: cfg.d_model,
+            d_inner: di,
+            d_state: ds,
+            nheads: nh,
+            headdim: hd,
+            ngroups: ng,
+            in_proj_dim: ip,
+            seq_len,
+            mamba_input_dim: input_dim,
+            n_layers: nl,
+            n_angles: na,
+            a_floor: cfg.a_floor,
+            is_outproj_norm: cfg.is_outproj_norm,
+            use_parallel_scan: false,
+        };
+
+        let gpu_w = GpuMamba3Weights::from_cpu(&ctx.stream, &cpu_weights, &cfg, input_dim).unwrap();
+        let input_gpu = GpuBuffer::from_cpu(&ctx.stream, &input_data).unwrap();
+
+        let mut temporal_gpu = GpuBuffer::zeros(&ctx.stream, bt * cfg.d_model).unwrap();
+        let mut acts_gpu = GpuMamba3BackboneActs::new(&ctx.stream, &dims_gpu).unwrap();
+        let mut scratch_gpu = GpuMamba3Scratch::new(&ctx.stream, &dims_gpu).unwrap();
+        let mut ssm_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * hd * ds).unwrap();
+        let mut k_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * ds).unwrap();
+        let mut v_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * hd).unwrap();
+        let mut a_gpu = GpuBuffer::zeros(&ctx.stream, nl * nh * na).unwrap();
+
+        gpu_forward_mamba3_backbone(
+            &ctx,
+            &m3k,
+            &mut temporal_gpu,
+            &mut acts_gpu,
+            &gpu_w,
+            &input_gpu,
+            &mut ssm_gpu,
+            &mut k_gpu,
+            &mut v_gpu,
+            &mut a_gpu,
+            &mut scratch_gpu,
+            &dims_gpu,
+        )
+        .unwrap();
+
+        let grads_gpu = GpuMamba3Grads::new(&ctx.stream, &cfg, input_dim).unwrap();
+        let mut d_temporal_gpu =
+            GpuBuffer::from_cpu(&ctx.stream, &vec![1.0f32; bt * cfg.d_model]).unwrap();
+
+        gpu_backward_mamba3_backbone(
+            &ctx,
+            &m3k,
+            &mut d_temporal_gpu,
+            &acts_gpu,
+            &gpu_w,
+            &grads_gpu,
+            &mut scratch_gpu,
+            &dims_gpu,
+        )
+        .unwrap();
+
+        ctx.stream.synchronize().unwrap();
+
+        // TF32 tolerance: atol=0.5, rtol=0.10 (same as Mamba-1 GPU backward tests)
+        let atol = 0.5_f32;
+        let rtol = 0.10_f32;
+
+        let mut max_violation = 0.0f32;
+
+        let check_grad = |name: &str, gpu_slice: &GradSlice, cpu_slice: &[f32]| {
+            let gpu_vals = gpu_slice.to_cpu().unwrap();
+            for (i, (g, c)) in gpu_vals.iter().zip(cpu_slice.iter()).enumerate() {
+                let diff = (g - c).abs();
+                let tol = atol + rtol * c.abs();
+                if diff > tol && diff > 1e-4 {
+                    let violation = diff / tol;
+                    if violation > max_violation {
+                        max_violation = violation;
+                        eprintln!(
+                            "{}: idx={} gpu={:.6} cpu={:.6} diff={:.6} tol={:.6} ratio={:.2}",
+                            name, i, g, c, diff, tol, violation
+                        );
+                    }
+                }
+            }
+        };
+
+        check_grad(
+            "input_proj_w",
+            &grads_gpu.input_proj_w,
+            &cpu_grads.input_proj_w,
+        );
+        check_grad(
+            "layers[0].in_proj_w",
+            &grads_gpu.layers[0].in_proj_w,
+            &cpu_grads.layers[0].in_proj_w,
+        );
+        check_grad(
+            "layers[0].out_proj_w",
+            &grads_gpu.layers[0].out_proj_w,
+            &cpu_grads.layers[0].out_proj_w,
+        );
+
+        assert!(
+            max_violation < 5.0,
+            "GPU vs CPU backward gradient mismatch: max_violation={:.2}x tolerance",
+            max_violation
+        );
+    }
+}

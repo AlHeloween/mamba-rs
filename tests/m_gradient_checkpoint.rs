@@ -1,6 +1,6 @@
+use mamba_rs::MambaConfig;
 use mamba_rs::ops::dims::MambaDims;
 use mamba_rs::train::checkpoint::CheckpointState;
-use mamba_rs::MambaConfig;
 
 #[test]
 fn test_checkpoint_state_allocation() {

@@ -61,9 +61,9 @@ pub mod gpu {
 
 pub use config::MambaConfig;
 pub use mamba_ssm::cpu::inference::{
-    mamba_block_step, mamba_layer_step, mamba_step, MambaLayerScratch, MambaStepScratch,
+    MambaLayerScratch, MambaStepScratch, mamba_block_step, mamba_layer_step, mamba_step,
 };
-pub use module::MambaBackbone;
+pub use module::{Mamba3Backbone, MambaBackbone};
 pub use schedule::{ConstantLR, LRSchedule, LinearWarmup, StepDecay, WarmupCosine, WarmupLinear};
 pub use state::{MambaLayerState, MambaState};
 pub use weights::{MambaLayerWeights, MambaWeights};

@@ -971,6 +971,25 @@ pub fn gpu_forward_mamba3_layer(
 // ---------------------------------------------------------------------------
 
 /// Mamba-3 SISO full backbone forward (input proj + N layers + norm_f).
+///
+/// ## Pipeline
+/// ```text
+/// input [B*T*mamba_input_dim]
+///   → input_proj SGEMM → [B*T*d_model]
+///   → for each layer: gpu_forward_mamba3_layer (8-phase)
+///   → norm_f RMSNorm → output [B*T*d_model]
+/// ```
+///
+/// ## State
+/// Four persistent state buffers are mutated in-place:
+/// - `ssm_states`: `[B*n_layers*nh*hd*ds]` — SSM hidden state
+/// - `k_states`: `[B*n_layers*nh*ds]` — previous K (post-RoPE B)
+/// - `v_states`: `[B*n_layers*nh*hd]` — previous V (previous x)
+/// - `angle_states`: `[B*n_layers*nh*n_angles]` — RoPE cumulative angles
+///
+/// ## Parallel scan
+/// When `dims.use_parallel_scan=true`, uses chunked parallel scan
+/// (threshold T>64) instead of sequential SSM recurrence.
 pub fn gpu_forward_mamba3_backbone(
     ctx: &GpuCtx,
     m3k: &Mamba3Kernels,
@@ -1423,15 +1442,15 @@ pub fn gpu_backward_mamba3_layer(
             builder.arg(scratch.d_c_pre_rope.inner_mut()); // dQ_pre [B*T*nh*ds]
             builder.arg(scratch.d_b_pre_rope.inner_mut()); // dK_pre [B*T*nh*ds]
             builder.arg(scratch.d_angle_cumsum.inner_mut()); // dAngles_cumsum
-                                                             // d_scale/d_gamma_par: both output (dScale/dGamma) and input (Scale/Gamma from R1c)
-                                                             // Use raw_ptr for input to avoid borrow conflict
+            // d_scale/d_gamma_par: both output (dScale/dGamma) and input (Scale/Gamma from R1c)
+            // Use raw_ptr for input to avoid borrow conflict
             let scale_in_ptr = scratch.d_scale.raw_ptr(&ctx.stream);
             let gamma_in_ptr = scratch.d_gamma_par.raw_ptr(&ctx.stream);
             builder.arg(scratch.d_scale.inner_mut()); // dScale [B*T*nh]
             builder.arg(scratch.d_gamma_par.inner_mut()); // dGamma [B*T*nh]
             builder.arg(&d_cb_ptr); // dQ_bias [nh*ds] atomicAdd
             builder.arg(&d_bb_ptr); // dK_bias [nh*ds] atomicAdd
-                                    // Inputs
+            // Inputs
             builder.arg(acts.c_biased.inner()); // Q_raw (pre-RoPE, post-bias)
             builder.arg(acts.b_biased.inner()); // K_raw
             builder.arg(&scale_in_ptr); // Scale_in (from R1c, raw ptr)
@@ -1824,6 +1843,23 @@ pub fn gpu_backward_mamba3_layer(
 // ---------------------------------------------------------------------------
 
 /// Mamba-3 SISO full backbone backward.
+///
+/// ## Pipeline
+/// ```text
+/// d_temporal [B*T*d_model] (gradient from downstream)
+///   → norm_f RMSNorm backward
+///   → for each layer (reverse): gpu_backward_mamba3_layer (8-phase BPTT)
+///   → d_temporal becomes gradient w.r.t. backbone input
+/// ```
+///
+/// ## Gradient accumulation
+/// Gradients are accumulated into `grads` (GpuMamba3Grads).
+/// Caller must `grads.zero(stream)` before calling if starting fresh.
+///
+/// ## Note
+/// Uses sequential SSM backward (BPTT through recurrent state).
+/// When `dims.use_parallel_scan=true`, uses parallel scan backward
+/// (10-kernel pipeline per layer instead of sequential recurrence).
 pub fn gpu_backward_mamba3_backbone(
     ctx: &GpuCtx,
     m3k: &Mamba3Kernels,

@@ -1,19 +1,19 @@
-use crate::config::MambaConfig;
-use crate::inference::{MambaStepScratch, mamba_step};
-use crate::state::MambaState;
-use crate::weights::{MambaLayerWeights, MambaWeights};
+use crate::mamba3_siso::config::Mamba3Config;
+use crate::mamba3_siso::cpu::inference::{Mamba3StepScratch, mamba3_step};
+use crate::mamba3_siso::state::Mamba3State;
+use crate::mamba3_siso::weights::{Mamba3LayerWeights, Mamba3Weights};
 
-/// Complete Mamba backbone: input_proj -> N layers -> norm_f.
+/// Complete Mamba-3 SISO backbone: input_proj → N layers → norm_f.
 ///
-/// Owns all weights. Provides both single-step recurrent inference
+/// Owns all weights. Provides single-step recurrent inference
 /// and access to raw weights for training integration.
 ///
 /// ```rust
-/// use mamba_rs::module::MambaBackbone;
-/// use mamba_rs::MambaConfig;
+/// use mamba_rs::module::Mamba3Backbone;
+/// use mamba_rs::Mamba3Config;
 ///
-/// let cfg = MambaConfig::default();
-/// let backbone = MambaBackbone::init(cfg, 128, 42);
+/// let cfg = Mamba3Config::default();
+/// let backbone = Mamba3Backbone::init(cfg, 128, 42);
 ///
 /// let mut state = backbone.alloc_state();
 /// let mut scratch = backbone.alloc_scratch();
@@ -22,19 +22,19 @@ use crate::weights::{MambaLayerWeights, MambaWeights};
 /// let input = vec![0.1f32; 128];
 /// backbone.forward_step(&input, &mut output, &mut state, &mut scratch);
 /// ```
-pub struct MambaBackbone {
-    weights: MambaWeights,
-    cfg: MambaConfig,
+pub struct Mamba3Backbone {
+    weights: Mamba3Weights,
+    cfg: Mamba3Config,
     input_dim: usize,
 }
 
-impl MambaBackbone {
-    /// Create a backbone with Mamba-specific weight initialization.
+impl Mamba3Backbone {
+    /// Create a backbone with Mamba-3-specific weight initialization.
     ///
-    /// Uses Kaiming uniform for projections, log-space init for A,
-    /// inverse-softplus init for dt_proj bias (Gu & Dao, Section 3.5).
-    pub fn init(cfg: MambaConfig, input_dim: usize, seed: u64) -> Self {
-        let weights = MambaWeights::init(&cfg, input_dim, seed);
+    /// Uses Kaiming uniform for projections, inverse-softplus init
+    /// for dt_bias (Lahoti et al., Section 3.3).
+    pub fn init(cfg: Mamba3Config, input_dim: usize, seed: u64) -> Self {
+        let weights = Mamba3Weights::init(&cfg, input_dim, seed);
         Self {
             weights,
             cfg,
@@ -45,9 +45,9 @@ impl MambaBackbone {
     /// Create a backbone from pre-loaded weights.
     ///
     /// Validates dimensions against config. Returns `Err` on mismatch.
-    pub fn from_weights(cfg: MambaConfig, weights: MambaWeights) -> Result<Self, String> {
+    pub fn from_weights(cfg: Mamba3Config, weights: Mamba3Weights) -> Result<Self, String> {
+        weights.validate(&cfg, cfg.d_model)?;
         let input_dim = weights.input_proj_w.len() / cfg.d_model;
-        weights.validate(&cfg, input_dim)?;
         Ok(Self {
             weights,
             cfg,
@@ -56,27 +56,27 @@ impl MambaBackbone {
     }
 
     /// Extract owned weights (consuming self).
-    pub fn into_weights(self) -> MambaWeights {
+    pub fn into_weights(self) -> Mamba3Weights {
         self.weights
     }
 
     /// Read-only weight access.
-    pub fn weights(&self) -> &MambaWeights {
+    pub fn weights(&self) -> &Mamba3Weights {
         &self.weights
     }
 
     /// Mutable weight access (for optimizer updates).
-    pub fn weights_mut(&mut self) -> &mut MambaWeights {
+    pub fn weights_mut(&mut self) -> &mut Mamba3Weights {
         &mut self.weights
     }
 
     /// Read-only access to a specific layer's weights.
-    pub fn layer(&self, index: usize) -> &MambaLayerWeights {
+    pub fn layer(&self, index: usize) -> &Mamba3LayerWeights {
         &self.weights.layers[index]
     }
 
     /// Mutable access to a specific layer's weights.
-    pub fn layer_mut(&mut self, index: usize) -> &mut MambaLayerWeights {
+    pub fn layer_mut(&mut self, index: usize) -> &mut Mamba3LayerWeights {
         &mut self.weights.layers[index]
     }
 
@@ -91,7 +91,7 @@ impl MambaBackbone {
     }
 
     /// The config this backbone was built with.
-    pub fn config(&self) -> &MambaConfig {
+    pub fn config(&self) -> &Mamba3Config {
         &self.cfg
     }
 
@@ -102,24 +102,23 @@ impl MambaBackbone {
 
     /// Single-step recurrent forward through the full backbone.
     ///
-    /// `input_proj(input) -> N x layer_step -> norm_f -> output`
+    /// `input_proj(input) → N × layer_step → norm_f → output`
     ///
-    /// Zero allocations per call. Delegates to [`mamba_step`].
+    /// Zero allocations per call. Delegates to [`mamba3_step`].
     pub fn forward_step(
         &self,
         input: &[f32],
         output: &mut [f32],
-        state: &mut MambaState,
-        scratch: &mut MambaStepScratch,
+        state: &mut Mamba3State,
+        scratch: &mut Mamba3StepScratch,
     ) {
-        mamba_step(
-            input,
+        mamba3_step(
             output,
+            input,
+            scratch,
             &self.weights,
             &mut state.layers,
-            scratch,
             &self.cfg,
-            self.input_dim,
         );
     }
 
@@ -127,13 +126,13 @@ impl MambaBackbone {
     ///
     /// `inputs`: `[T * input_dim]` — T sequential inputs.
     /// `outputs`: `[T * d_model]` — T sequential outputs (written in-place).
-    /// State carries across all T steps (warm-up, offline eval, etc.).
+    /// State carries across all T steps.
     pub fn forward_sequence(
         &self,
         inputs: &[f32],
         outputs: &mut [f32],
-        state: &mut MambaState,
-        scratch: &mut MambaStepScratch,
+        state: &mut Mamba3State,
+        scratch: &mut Mamba3StepScratch,
         seq_len: usize,
     ) {
         let dm = self.cfg.d_model;
@@ -146,40 +145,13 @@ impl MambaBackbone {
         }
     }
 
-    /// Batched single-step forward through the backbone.
-    ///
-    /// Processes B independent samples with the same weights.
-    /// `inputs`: `[B * input_dim]`, `outputs`: `[B * d_model]`.
-    pub fn forward_step_batch(
-        &self,
-        inputs: &[f32],
-        outputs: &mut [f32],
-        states: &mut [MambaState],
-        scratches: &mut [MambaStepScratch],
-    ) {
-        crate::inference::mamba_step_batch(
-            inputs,
-            outputs,
-            &self.weights,
-            states,
-            scratches,
-            &self.cfg,
-            self.input_dim,
-        );
-    }
-
     /// Allocate zeroed recurrent state matching this backbone.
-    pub fn alloc_state(&self) -> MambaState {
-        MambaState::zeros(
-            self.cfg.n_layers,
-            self.cfg.d_inner(),
-            self.cfg.d_state,
-            self.cfg.d_conv,
-        )
+    pub fn alloc_state(&self) -> Mamba3State {
+        Mamba3State::zeros(&self.cfg)
     }
 
     /// Allocate inference scratch buffers matching this backbone.
-    pub fn alloc_scratch(&self) -> MambaStepScratch {
-        MambaStepScratch::new(&self.cfg)
+    pub fn alloc_scratch(&self) -> Mamba3StepScratch {
+        Mamba3StepScratch::new(&self.cfg)
     }
 }

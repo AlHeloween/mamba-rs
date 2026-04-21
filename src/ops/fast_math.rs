@@ -43,17 +43,9 @@ fn roundeven(x: f32) -> f32 {
     // Must use sign-preserving variant for negative numbers.
     const MAGIC: f32 = 8_388_608.0; // 2^23
     if x >= 0.0 {
-        if x >= MAGIC {
-            x
-        } else {
-            (x + MAGIC) - MAGIC
-        }
+        if x >= MAGIC { x } else { (x + MAGIC) - MAGIC }
     } else {
-        if -x >= MAGIC {
-            x
-        } else {
-            (x - MAGIC) + MAGIC
-        }
+        if -x >= MAGIC { x } else { (x - MAGIC) + MAGIC }
     }
 }
 

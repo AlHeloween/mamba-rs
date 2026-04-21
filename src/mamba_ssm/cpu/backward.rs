@@ -18,7 +18,7 @@
 //! - Batched SGEMM: `forward_mamba_layer_batched` / `backward_mamba_layer_batched`
 //! - Full backbone: `forward_mamba_backbone_batched` / `backward_mamba_backbone_batched`
 
-use super::backward_ops::{backward_conv1d_step, backward_rms_norm, Conv1dDims};
+use super::backward_ops::{Conv1dDims, backward_conv1d_step, backward_rms_norm};
 use super::flat::{MambaBackboneFlat, MambaLayerFlat};
 use super::scratch::BackwardPhaseScratch;
 use super::weights::{TrainMambaLayerWeights, TrainMambaWeights};

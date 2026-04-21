@@ -23,7 +23,7 @@ use super::scratch::PhaseScratch;
 use super::weights::{TrainMambaLayerWeights, TrainMambaWeights};
 use crate::ops::blas::{matvec_forward, sgemm_forward};
 use crate::ops::dims::{MambaDims, MambaRecurrentState};
-use crate::ops::fast_math::{fast_exp_scalar, RMS_NORM_EPS};
+use crate::ops::fast_math::{RMS_NORM_EPS, fast_exp_scalar};
 
 /// O2 optimized single-layer Mamba forward pass: 7-phase pipeline with batched SGEMM.
 ///

@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rayon::prelude::*;
 
@@ -9,8 +9,8 @@ use super::flat::MambaBackboneFlat;
 use super::forward::forward_mamba_backbone_batched;
 use super::scratch::{BackwardPhaseScratch, PhaseScratch};
 use super::target::{
-    forward_mamba_target_sequence, forward_mamba_target_step, MambaTargetScratch,
-    MambaTargetSeqScratch,
+    MambaTargetScratch, MambaTargetSeqScratch, forward_mamba_target_sequence,
+    forward_mamba_target_step,
 };
 use super::weights::TrainMambaWeights;
 use crate::ops::dims::{MambaDims, MambaRecurrentState};

@@ -70,11 +70,7 @@ fn kaiming_uniform(buf: &mut [f32], fan_in: usize, rng: &mut SimpleRng) {
 }
 
 fn inv_softplus(x: f32) -> f32 {
-    if x > 20.0 {
-        x
-    } else {
-        (x.exp() - 1.0).ln()
-    }
+    if x > 20.0 { x } else { (x.exp() - 1.0).ln() }
 }
 
 impl Mamba3Weights {
@@ -175,6 +171,30 @@ impl Mamba3Weights {
             ck(&p("out_proj_w"), lw.out_proj_w.len(), di * d)?;
         }
         Ok(())
+    }
+
+    /// Total parameter count.
+    pub fn param_count(&self, input_dim: usize, cfg: &Mamba3Config) -> usize {
+        let d = cfg.d_model;
+        let di = cfg.d_inner();
+        let ds = cfg.d_state;
+        let nh = cfg.nheads();
+        let ip = cfg.in_proj_out_dim();
+
+        let mut count = input_dim * d + d + d; // input_proj_w + input_proj_b + norm_f_weight
+        for _ in 0..cfg.n_layers {
+            count += d // norm_weight
+                + d * ip // in_proj_w
+                + nh // dt_bias
+                + ds // b_norm_weight
+                + ds // c_norm_weight
+                + nh * ds // b_bias
+                + nh * ds // c_bias
+                + nh // d_param
+                + di // norm_gate_weight
+                + di * d; // out_proj_w
+        }
+        count
     }
 }
 

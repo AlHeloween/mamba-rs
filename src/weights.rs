@@ -244,9 +244,5 @@ fn kaiming_uniform(w: &mut [f32], fan_in: usize, rng: &mut SimpleRng) {
 }
 
 fn inv_softplus(y: f32) -> f32 {
-    if y > 20.0 {
-        y
-    } else {
-        (y.exp() - 1.0).ln()
-    }
+    if y > 20.0 { y } else { (y.exp() - 1.0).ln() }
 }
