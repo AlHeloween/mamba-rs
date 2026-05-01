@@ -13,11 +13,16 @@ keywords = ["mamba", "ssm", "deep-learning", "cuda", "state-space-model"]
 categories = ["science", "mathematics"]
 readme = "README.md"
 
+[lib]
+name = "mamba_rs"
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = []
 cuda = ["cudarc"]
 accelerate = []
 gemm-blas = ["gemm"]
+ffi = []
 
 [dependencies]
 pulp = "0.22"

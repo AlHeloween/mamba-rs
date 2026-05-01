@@ -20,6 +20,8 @@ fn main() {
         rope_fraction: 0.5,
         a_floor: 0.0625,
         is_outproj_norm: false,
+        use_wavelet: true,
+        wavelet_levels: 0,
     };
     cfg.validate();
 

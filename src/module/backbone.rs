@@ -1,5 +1,5 @@
 use crate::config::MambaConfig;
-use crate::inference::{MambaStepScratch, mamba_step};
+use crate::inference::{mamba_step, MambaStepScratch};
 use crate::state::MambaState;
 use crate::weights::{MambaLayerWeights, MambaWeights};
 

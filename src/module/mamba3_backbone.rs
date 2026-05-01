@@ -1,5 +1,5 @@
 use crate::mamba3_siso::config::Mamba3Config;
-use crate::mamba3_siso::cpu::inference::{Mamba3StepScratch, mamba3_step};
+use crate::mamba3_siso::cpu::inference::{mamba3_step, Mamba3StepScratch};
 use crate::mamba3_siso::state::Mamba3State;
 use crate::mamba3_siso::weights::{Mamba3LayerWeights, Mamba3Weights};
 

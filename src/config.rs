@@ -55,6 +55,15 @@ pub struct MambaConfig {
     /// GPU SSM scan mode. Default: Auto (sequential T<=128, parallel T>128).
     /// Only affects GPU training forward/backward. CPU always uses sequential.
     pub scan_mode: ScanMode,
+
+    /// Use Haar wavelet input decomposition. Default: true.
+    /// When enabled, input signals are decomposed into wavelet bands
+    /// (approximation + details) and fed as separate channels.
+    pub use_wavelet: bool,
+
+    /// Number of wavelet decomposition levels. 0 = auto (= min(6, log2(seq_len))).
+    /// Only used when `use_wavelet` is true.
+    pub wavelet_levels: usize,
 }
 
 impl MambaConfig {
@@ -135,6 +144,8 @@ impl Default for MambaConfig {
             expand: 2,
             n_layers: 3,
             scan_mode: ScanMode::Auto,
+            use_wavelet: true,
+            wavelet_levels: 0,
         }
     }
 }

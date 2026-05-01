@@ -221,6 +221,8 @@ mod tests {
             rope_fraction: 0.5,
             a_floor: 1e-4,
             is_outproj_norm: false,
+            use_wavelet: true,
+            wavelet_levels: 0,
         };
         Mamba3Dims::from_config(&cfg, 33)
     }

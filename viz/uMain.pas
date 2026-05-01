@@ -1,0 +1,483 @@
+﻿unit uMain;
+
+interface
+
+uses
+  System.SysUtils, System.Classes, System.Types, System.UITypes, System.Generics.Collections, System.SyncObjs, System.Math,
+  Winapi.Windows, Winapi.Messages, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls,
+  Vcl.ComCtrls, Vcl.ExtCtrls, Vcl.Samples.Spin, Vcl.Imaging.pngimage, Vcl.Graphics,
+  VCLTee.Chart, VCLTee.Series, TeeProcs, TeEngine, VCLTee.TeeEdiGene;
+
+type
+  TSignalArray = TArray<Single>;
+
+  TFormMain = class(TForm)
+    PageControl1: TPageControl;
+    TabSignal: TTabSheet;
+    TabWavelet: TTabSheet;
+    TabPredictions: TTabSheet;
+    TabMetrics: TTabSheet;
+    Panel1: TPanel;
+    Label1: TLabel;
+    ComboBoxSignalType: TComboBox;
+    ButtonGenerate: TButton;
+    ButtonTrain: TButton;
+    ButtonStop: TButton;
+    SpinEditSeqLen: TSpinEdit;
+    Label2: TLabel;
+    Label3: TLabel;
+    SpinEditEpochs: TSpinEdit;
+    Label4: TLabel;
+    SpinEditWaveletLevels: TSpinEdit;
+    StatusBar1: TStatusBar;
+    ChartSignal: TChart;
+    SeriesSignal: TLineSeries;
+    SeriesTrainMarker: TLineSeries;
+    SeriesTestMarker: TLineSeries;
+    ChartWavelet: TChart;
+    SeriesApprox: TLineSeries;
+    SeriesDetail1: TLineSeries;
+    SeriesDetail2: TLineSeries;
+    SeriesDetail3: TLineSeries;
+    SeriesDetail4: TLineSeries;
+    ChartPredictions: TChart;
+    SeriesActual: TLineSeries;
+    SeriesPredRaw: TLineSeries;
+    SeriesPredWavelet: TLineSeries;
+    ChartMetrics: TChart;
+    SeriesLoss: TLineSeries;
+    SeriesR2: TLineSeries;
+    Label5: TLabel;
+    SpinEditLayers: TSpinEdit;
+    SpinEditDModel: TSpinEdit;
+    Label6: TLabel;
+    Label7: TLabel;
+    SpinEditDState: TSpinEdit;
+    Label8: TLabel;
+    SpinEditDConv: TSpinEdit;
+    Label9: TLabel;
+    SpinEditExpand: TSpinEdit;
+    Label10: TLabel;
+    procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
+    procedure ButtonGenerateClick(Sender: TObject);
+    procedure ButtonTrainClick(Sender: TObject);
+    procedure ButtonStopClick(Sender: TObject);
+    procedure ChartSignalDblClick(Sender: TObject);
+  private
+    FMambaDLL: TObject;
+    FSignal: TSignalArray;
+    FSignalType: Integer;
+    FTraining: Boolean;
+    FTrainThread: TThread;
+    FTrainStopFlag: Boolean;
+    FPredValues: TArray<Single>;
+    FActualValues: TArray<Single>;
+    FLossValues: TArray<Single>;
+    FEpochCount: Integer;
+    FCrit: TRTLCriticalSection;
+    procedure UpdateSignalChart;
+    procedure UpdateWaveletChart;
+    procedure UpdateStatus(const msg: string);
+    procedure StartTraining;
+    procedure StopTraining;
+    procedure OnTrainingUpdate(Sender: TObject);
+    procedure UpdatePredictionsChart;
+    procedure UpdateMetricsChart;
+  public
+    { Public declarations }
+  end;
+
+var
+  FormMain: TFormMain;
+
+implementation
+
+{$R *.dfm}
+
+uses
+  uMambaFFI;
+
+procedure TFormMain.FormCreate(Sender: TObject);
+begin
+  InitializeCriticalSection(FCrit);
+  FMambaDLL := TMambaDLL.Create;
+  try
+    TMambaDLL(FMambaDLL).Load(ExtractFilePath(ParamStr(0)) + 'mamba_rs.dll');
+  except
+    on E: Exception do
+      UpdateStatus('DLL load failed: ' + E.Message);
+  end;
+
+  ComboBoxSignalType.ItemIndex := 0;
+  SpinEditSeqLen.Value := 360;
+  SpinEditEpochs.Value := 30;
+  SpinEditWaveletLevels.Value := 4;
+  SpinEditLayers.Value := 2;
+  SpinEditDModel.Value := 32;
+  SpinEditDState.Value := 8;
+  SpinEditDConv.Value := 4;
+  SpinEditExpand.Value := 2;
+
+  ChartSignal.LeftAxis.Title.Caption := 'Amplitude';
+  ChartSignal.BottomAxis.Title.Caption := 'Time Step';
+  ChartWavelet.LeftAxis.Title.Caption := 'Coefficient Value';
+  ChartWavelet.BottomAxis.Title.Caption := 'Time Step';
+  ChartPredictions.LeftAxis.Title.Caption := 'Value';
+  ChartPredictions.BottomAxis.Title.Caption := 'Sample';
+  ChartMetrics.LeftAxis.Title.Caption := 'Loss';
+  ChartMetrics.RightAxis.Title.Caption := 'R²';
+  ChartMetrics.BottomAxis.Title.Caption := 'Epoch';
+
+  SeriesSignal.LinePen.Width := 2;
+  SeriesSignal.Color := clBlue;
+  SeriesTrainMarker.Color := clGreen;
+  SeriesTrainMarker.LinePen.Style := psClear;
+  SeriesTestMarker.Color := clYellow;
+  SeriesTestMarker.LinePen.Style := psClear;
+
+  SeriesApprox.Color := clNavy;
+  SeriesApprox.LinePen.Width := 2;
+  SeriesDetail1.Color := clRed;
+  SeriesDetail2.Color := clGreen;
+  SeriesDetail3.Color := $0080FF;
+  SeriesDetail4.Color := clPurple;
+
+  SeriesActual.Color := clBlack;
+  SeriesActual.LinePen.Width := 3;
+  SeriesPredRaw.Color := clGray;
+  SeriesPredRaw.LinePen.Style := psDash;
+  SeriesPredWavelet.Color := clBlue;
+  SeriesPredWavelet.LinePen.Width := 2;
+
+  SeriesLoss.Color := clRed;
+  SeriesR2.Color := clBlue;
+
+  UpdateStatus('Ready — mamba_rs.dll: ' + BoolToStr(TMambaDLL(FMambaDLL).Loaded, True));
+end;
+
+procedure TFormMain.FormDestroy(Sender: TObject);
+begin
+  StopTraining;
+  FMambaDLL.Free;
+  DeleteCriticalSection(FCrit);
+end;
+
+procedure TFormMain.ButtonGenerateClick(Sender: TObject);
+var
+  sigType: TMambaSignalType;
+  len: NativeUInt;
+begin
+  if not TMambaDLL(FMambaDLL).Loaded then
+  begin
+    UpdateStatus('Error: mamba_rs.dll not loaded');
+    Exit;
+  end;
+
+  sigType := TMambaSignalType(ComboBoxSignalType.ItemIndex);
+  len := SpinEditSeqLen.Value;
+  SetLength(FSignal, len);
+  TMambaDLL(FMambaDLL).GenerateSignal(sigType, @FSignal[0], len, 42);
+  FSignalType := ComboBoxSignalType.ItemIndex;
+
+  UpdateSignalChart;
+  UpdateWaveletChart;
+  UpdateStatus(Format('Generated %s signal (%d samples)', [ComboBoxSignalType.Text, len]));
+end;
+
+procedure TFormMain.ButtonTrainClick(Sender: TObject);
+begin
+  if Length(FSignal) = 0 then
+  begin
+    UpdateStatus('Error: Generate signal first');
+    Exit;
+  end;
+  StartTraining;
+end;
+
+procedure TFormMain.ChartSignalDblClick(Sender: TObject);
+var
+  Chart: TChart;
+begin
+  if Sender is TChart then
+  begin
+    Chart := TChart(Sender);
+    with TFormTeeGeneral.Create(Application) do
+    try
+      TheChart := Chart;
+      ShowModal;
+    finally
+      Free;
+    end;
+  end;
+end;
+
+procedure TFormMain.ButtonStopClick(Sender: TObject);
+begin
+  StopTraining;
+end;
+
+procedure TFormMain.UpdateSignalChart;
+var
+  i: Integer;
+begin
+  SeriesSignal.Clear;
+  for i := 0 to High(FSignal) do
+    SeriesSignal.AddXY(i, FSignal[i], '', clBlack);
+end;
+
+procedure TFormMain.UpdateWaveletChart;
+var
+  levels, channelsLen: NativeUInt;
+  channels: TSignalArray;
+  i: Integer;
+begin
+  if Length(FSignal) = 0 then Exit;
+
+  levels := SpinEditWaveletLevels.Value;
+  channelsLen := TMambaDLL(FMambaDLL).HaarChannelsLen(SpinEditSeqLen.Value, levels);
+  SetLength(channels, channelsLen);
+  TMambaDLL(FMambaDLL).HaarDecompose(@FSignal[0], SpinEditSeqLen.Value, levels, @channels[0]);
+
+  SeriesApprox.Clear;
+  SeriesDetail1.Clear;
+  SeriesDetail2.Clear;
+  SeriesDetail3.Clear;
+  SeriesDetail4.Clear;
+
+  for i := 0 to Integer(SpinEditSeqLen.Value) - 1 do
+  begin
+    SeriesApprox.AddXY(i, channels[i], '', clBlack);
+    if levels >= 1 then
+      SeriesDetail1.AddXY(i, channels[Integer(channelsLen div (levels + 1) * 1) + i], '', clBlack);
+    if levels >= 2 then
+      SeriesDetail2.AddXY(i, channels[Integer(channelsLen div (levels + 1) * 2) + i], '', clBlack);
+    if levels >= 3 then
+      SeriesDetail3.AddXY(i, channels[Integer(channelsLen div (levels + 1) * 3) + i], '', clBlack);
+    if levels >= 4 then
+      SeriesDetail4.AddXY(i, channels[Integer(channelsLen div (levels + 1) * 4) + i], '', clBlack);
+  end;
+end;
+
+procedure TFormMain.UpdateStatus(const msg: string);
+begin
+  StatusBar1.SimpleText := msg;
+end;
+
+type
+  TTrainThread = class(TThread)
+  private
+    FOwner: TFormMain;
+    FEpoch: Integer;
+    FLoss: Single;
+    FPredTmp: TArray<Single>;
+    FActualTmp: TArray<Single>;
+    FCfg: TFfiMambaConfig;
+    FSeqLen, FTrainLen, FTestLen, FLookback, FTrainSplit, FInputDim, FDModel, FEpochs: NativeUInt;
+    FSignalRef: TSignalArray;
+    procedure DoUpdate;
+  public
+    constructor Create(AOwner: TFormMain; const ASignal: TSignalArray; const ACfg: TFfiMambaConfig;
+      ASeqLen, ATrainLen, ATestLen, ALookback, ATrainSplit, AInputDim, ADModel, AEpochs: NativeUInt); reintroduce;
+    procedure Execute; override;
+  end;
+
+constructor TTrainThread.Create(AOwner: TFormMain; const ASignal: TSignalArray; const ACfg: TFfiMambaConfig;
+  ASeqLen, ATrainLen, ATestLen, ALookback, ATrainSplit, AInputDim, ADModel, AEpochs: NativeUInt);
+begin
+  inherited Create(True);
+  FOwner := AOwner;
+  FSignalRef := Copy(ASignal);
+  FCfg := ACfg;
+  FSeqLen := ASeqLen;
+  FTrainLen := ATrainLen;
+  FTestLen := ATestLen;
+  FLookback := ALookback;
+  FTrainSplit := ATrainSplit;
+  FInputDim := AInputDim;
+  FDModel := ADModel;
+  FEpochs := AEpochs;
+  FreeOnTerminate := False;
+end;
+
+procedure TTrainThread.DoUpdate;
+var
+  i: Integer;
+begin
+  EnterCriticalSection(FOwner.FCrit);
+  try
+    SetLength(FOwner.FPredValues, Length(FPredTmp));
+    SetLength(FOwner.FActualValues, Length(FActualTmp));
+    for i := 0 to High(FPredTmp) do
+    begin
+      FOwner.FPredValues[i] := FPredTmp[i];
+      FOwner.FActualValues[i] := FActualTmp[i];
+    end;
+    FOwner.FEpochCount := FEpoch;
+    SetLength(FOwner.FLossValues, FEpoch + 1);
+    FOwner.FLossValues[FEpoch] := FLoss;
+  finally
+    LeaveCriticalSection(FOwner.FCrit);
+  end;
+  if Assigned(FOwner) then
+    FOwner.OnTrainingUpdate(Self);
+end;
+
+procedure TTrainThread.Execute;
+var
+  DLL: TMambaDLL;
+  Handle: TMambaHandle;
+  TrainInput, TrainTarget, TestInput: TArray<Single>;
+  i: Integer;
+  SumError, Loss: Single;
+begin
+  DLL := TMambaDLL(FOwner.FMambaDLL);
+  if not DLL.Loaded then Exit;
+
+  SetLength(TrainInput, FTrainLen * FInputDim);
+  SetLength(TrainTarget, FTrainLen);
+  SetLength(TestInput, FTestLen * FInputDim);
+  SetLength(FPredTmp, FTestLen);
+  SetLength(FActualTmp, FTestLen);
+
+  for i := 0 to Integer(FTrainLen) - 1 do
+  begin
+    TrainInput[i] := FSignalRef[i];
+    TrainTarget[i] := FSignalRef[i + Integer(FLookback)];
+  end;
+  for i := 0 to Integer(FTestLen) - 1 do
+  begin
+    TestInput[i] := FSignalRef[Integer(FTrainSplit) + i];
+    if i < Integer(FTestLen) - 1 then
+      FActualTmp[i] := FSignalRef[Integer(FTrainSplit) + i + 1]
+    else
+      FActualTmp[i] := FSignalRef[Integer(FTrainSplit) + i];
+  end;
+
+  Handle := DLL.MambaBackboneNew(FCfg, FInputDim, 42);
+  if Handle = nil then Exit;
+
+  try
+    FEpoch := 0;
+    while (FEpoch < Integer(FEpochs)) and (not FOwner.FTrainStopFlag) do
+    begin
+      SumError := 0;
+      for i := 0 to Integer(FTrainLen) - 1 do
+      begin
+        if FOwner.FTrainStopFlag then Break;
+        DLL.MambaForwardStep(Handle, @TrainInput[i], FInputDim, @FPredTmp[0]);
+        Loss := Abs(FPredTmp[0] - TrainTarget[i]);
+        SumError := SumError + Loss;
+      end;
+
+      if FOwner.FTrainStopFlag then Break;
+
+      FLoss := SumError / Max(1, Integer(FTrainLen));
+
+      for i := 0 to Integer(FTestLen) - 1 do
+        DLL.MambaForwardStep(Handle, @TestInput[i], FInputDim, @FPredTmp[i]);
+
+      Synchronize(DoUpdate);
+      Inc(FEpoch);
+    end;
+  finally
+    DLL.MambaBackboneFree(Handle);
+  end;
+end;
+
+procedure TFormMain.OnTrainingUpdate(Sender: TObject);
+begin
+  UpdatePredictionsChart;
+  UpdateMetricsChart;
+  UpdateStatus(Format('Training... Epoch %d/%d, Loss: %.6f',
+    [FEpochCount, SpinEditEpochs.Value, FLossValues[FEpochCount]]));
+end;
+
+procedure TFormMain.UpdatePredictionsChart;
+var
+  i: Integer;
+begin
+  SeriesActual.Clear;
+  SeriesPredRaw.Clear;
+  SeriesPredWavelet.Clear;
+  EnterCriticalSection(FCrit);
+  try
+    for i := 0 to High(FActualValues) do
+      SeriesActual.AddXY(i, FActualValues[i], '', clBlack);
+    for i := 0 to High(FPredValues) do
+      SeriesPredRaw.AddXY(i, FPredValues[i], '', clGray);
+  finally
+    LeaveCriticalSection(FCrit);
+  end;
+end;
+
+procedure TFormMain.UpdateMetricsChart;
+var
+  i: Integer;
+begin
+  SeriesLoss.Clear;
+  SeriesR2.Clear;
+  EnterCriticalSection(FCrit);
+  try
+    for i := 0 to FEpochCount do
+      SeriesLoss.AddXY(i, FLossValues[i], '', clRed);
+  finally
+    LeaveCriticalSection(FCrit);
+  end;
+end;
+
+procedure TFormMain.StartTraining;
+var
+  Cfg: TFfiMambaConfig;
+  SeqLen, TrainSplit, Lookback, TrainLen, TestLen: NativeUInt;
+begin
+  FTraining := True;
+  FTrainStopFlag := False;
+  ButtonTrain.Enabled := False;
+  ButtonStop.Enabled := True;
+
+  SeqLen := SpinEditSeqLen.Value;
+  Lookback := 20;
+  TrainSplit := (SeqLen * 80) div 100;
+  if TrainSplit <= Lookback then TrainSplit := SeqLen div 2;
+  TrainLen := TrainSplit - Lookback;
+  TestLen := SeqLen - TrainSplit;
+
+  Cfg.d_model := SpinEditDModel.Value;
+  Cfg.d_state := SpinEditDState.Value;
+  Cfg.d_conv := SpinEditDConv.Value;
+  Cfg.expand := SpinEditExpand.Value;
+  Cfg.n_layers := SpinEditLayers.Value;
+  Cfg.use_wavelet := 1;
+  Cfg.wavelet_levels := SpinEditWaveletLevels.Value;
+
+  SetLength(FPredValues, 0);
+  SetLength(FActualValues, 0);
+  SetLength(FLossValues, 0);
+  FEpochCount := 0;
+
+  SeriesLoss.Clear;
+  SeriesR2.Clear;
+  SeriesActual.Clear;
+  SeriesPredRaw.Clear;
+  SeriesPredWavelet.Clear;
+
+  FTrainThread := TTrainThread.Create(Self, FSignal, Cfg, SeqLen, TrainLen, TestLen, Lookback, TrainSplit, 1, SpinEditDModel.Value, SpinEditEpochs.Value);
+  FTrainThread.Start;
+end;
+
+procedure TFormMain.StopTraining;
+begin
+  FTrainStopFlag := True;
+  if FTrainThread <> nil then
+  begin
+    FTrainThread.WaitFor;
+    FreeAndNil(FTrainThread);
+  end;
+  FTraining := False;
+  ButtonTrain.Enabled := True;
+  ButtonStop.Enabled := False;
+  UpdateStatus('Stopped');
+end;
+
+end.

@@ -1,0 +1,145 @@
+---
+description: Use ADID framework and adm executable for updates and verification
+alwaysApply: true
+---
+
+## Absolute rules (CRITICAL)
+
+- **Follow the communication and workflow rules** in `docs/ADID_Framework_15_3.md`. After install, the project copy is at `docs/ADID_Framework_15_3.md`. Read it for epistemic markers, structure, and protocol.
+
+- **NO LEGACY COMPATIBILITY.** Do not add backward-compat parsing, fallback paths, alias modes, or "auto-repair" behaviors that silently reinterpret descriptors; instead migrate inputs explicitly or fail fast with a clear error. Reason: legacy behavior creates cross-conflicting code paths and preserves old bugs.
+
+- **GROUNDING IS REQUIRED FOR ALL DEVELOPMENT.** Ground all work in the real governing surfaces: existing code, tests, specifications, runtime behavior, docs, and other concrete artifacts. Do not let inference outrank grounded evidence.
+
+- **GREENFIELD WORK REQUIRES SOURCE COLLECTION + DETAILED PLAN.** If the task starts a new project, feature, or architecture without an existing implementation to port, first collect relevant source material, identify the governing references, and produce a detailed implementation plan before coding.
+
+- **TRANSLATION / PORT / REPLICATION MEANS REPLICATE.** If the user asks to translate, port, mirror, clone, replicate, or re-implement an existing project or behavior in another language or codebase, the existing implementation is the primary source of truth. Reproduce it as closely as the target platform allows; do not redesign, simplify, or substitute a different architecture unless the user explicitly asks for alternatives.
+
+- **CONTROL STUBS ARE FOR VERIFICATION, NOT SUBSTITUTION.** Explicit control stubs, probes, harnesses, or temporary verification scaffolds are allowed to check parity or isolate behavior, but they must be clearly labeled and must not replace the real implementation target.
+
+- **Documentation reproducibility (required):**
+  - Any document that claims a working state (status `production`, `test`, or `execution`) must include the universal YAML header + `reproduce:` block described in `extra_rules_for_all_agents.md`.
+  - Maintain `DOCINDEX.md` at repo root as the documentation surface index (owners/entrypoints/last_verified). This is separate from `index.md` which is the folder-based repository map.
+  - Keep `.github/PULL_REQUEST_TEMPLATE.md` aligned with DOCINDEX + reproducibility rules.
+  - When promoting research → production docs, include `docs/promotion.md` (template) as the audit trail.
+
+- **cmd_runner-only execution (CRITICAL)**: Any execution of **non-trivial / crash-prone / long-running commands** is strictly prohibited unless started via cmd_runner.
+  - Repo checkout (recommended): `.\cmd_runner.exe start -- <command ...>`
+  - Release bundle (recommended): `cmd_runner.exe start -- <command ...>`
+  - Rationale: cmd_runner isolates interactive process I/O and protects the agent shell from crashes/hangs.
+
+- **Canonical cmd_runner workflow (current; no server/legacy commands)**:
+  - Start interactive run in a new window: `.\cmd_runner.exe start [--cwd PATH] [--timeout-s N] [--env K=V ...] [--terminal HOST] -- <command ...>`
+  - It prints `run_id` and `inbox=.../inbox.jsonl` in the current terminal.
+  - Tail output: `.\cmd_runner.exe tail <run_id>`
+  - Inject input programmatically: append JSONL to `logs/cmd_runner/<run_id>/inbox.jsonl` or use `.\cmd_runner.exe send <run_id> --keys "TEXT:/exit,ENTER"`.
+
+- **cmd_runner usage (non-blocking)**: Prefer `start` -> `tail`. Avoid long fixed waits; if the task is still running, leave it and check later.
+
+- **Preferred shell discovery tools**: Use `rg` for in-file search, `fd` for file discovery, `head`/`tail` for focused file previews, and `grep` for filtering command output before reaching for slower or noisier alternatives.
+
+- **Windows cmd-from-bash capture quirk**: When calling Windows `cmd.exe` from a Bash-like shell (Git Bash/MSYS2/WSL interop) and you need the output captured, wrap via PowerShell:
+  - Pattern: `powershell -NoProfile -c 'cmd /c "<command>"'`
+  - Example: `powershell -NoProfile -c 'cmd /c "where dcc64"'`
+  - Reason: In some environments, `cmd /c <command>` can succeed but produce no captured output.
+
+- **Windows permission quirks (uv cache / pytest temp):**
+  - If `uv run ...` fails with `Access is denied` under the default UV cache (user profile), set `UV_CACHE_DIR` to a repo-local folder (example: `.uv_cache/`) and retry.
+  - If pytest temp cleanup fails with `PermissionError` on `--basetemp`, prefer placing basetemp under the repo (example: `uv run pytest -q --basetemp .temp/pytest`).
+  - If a temp folder becomes unreadable, reclaim and delete it via `takeown` + `icacls` + `rd /s /q` (hardware-grounded filesystem ops; do not "pretend" tests ran).
+  - Recommended start-of-work (Windows):
+    - cmd.exe: `call scripts\\dev_env_windows.cmd`
+    - PowerShell: `. .\\scripts\\dev_env_windows.ps1` (dot-source to affect the current session)
+
+- **Canonical agent assets**: Treat `artefacts/rules/` and `artefacts/skills/` as the source of truth. Agent folders (`.cursor/`, `.codex/`, `~/.codex/`, `.opencode/`) are receivers and may be deleted/recreated.
+
+- **Rebuild/install agent scaffolds**: After changing canonical rules/skills run:
+  - `uv run scripts/build_artefacts.py`
+  - `uv run scripts/sync_agent_assets.py`
+
+- **When making declarative updates, running verification, or using rollback/templates**, use the **adm-exe** skill: **prefer `tools/adm.exe` (Windows) or `tools/adm` (Unix)** when the project has adm installed there—it is a stable copy; tool modifications or errors in source will not break the toolchain. Otherwise use `uv run adm` in a repo that has adm as a dependency.
+
+- **Preferred workflow:** Create template (`--template/--tpl <replace|insert|refactor-replace-function|pattern-rule|binary-hex-replace|create|overwrite|delete|binary-overwrite> [output_dir]` - Generate a timestamped XML descriptor template under `./updates/`, rename template as `updates/[ISO8601]_[short_semantic_dominant].xml`, edit, then apply (`--apply`). To **replay history** (inspect descriptors in order): run `tools/adm --replay-updates` (or `tools/adm --replay-updates updates --until 20260202T120000 --limit 5`). Add `--unified-diff` for exact hunks; use `--execute --workdir DIR --confirm-execute APPLY_IN_WORKDIR_ONLY` only when you intentionally want to apply inside an isolated copy. Do not write XML descriptors from scratch. Multiple backups per file are by design and an advantage (rollback, traceability; project stays manageable). run `adm --verify-all` on selected roots (e.g. `src tests adid_tests`) for a clean report. Do not restore from git over local work; use `adm --rollback` and descriptor rollbacks instead. 
+
+- **Patch-tool wrapper (apply_patch format):** When you need apply_patch-style edits but still want ADID backups/ledgers, use `tools/adm.exe --patch-tool <patch_file>` (or `uv run adm --patch-tool <patch_file>` in a repo checkout).
+
+- **cmd_runner via adm (integration):** You may invoke cmd_runner through adm when you want it in the same progress-log cycle: `tools/adm.exe --cmd-runner start -- <command ...>` (Windows-only). Prefer this over ad-hoc wrappers so logs are centralized.
+
+- **updates/ is source of truth**: Treat `updates/` history as the durable record. Prefer `tools/adm.exe --replay-updates  over “progress logs”. 
+
+- **RAG indexing/query (`adm.json` required):**
+  - Config file must be `adm.json` in the launch folder. `adm` auto-creates it with defaults if missing.
+  - Index: `tools/adm.exe --rag index <index_name> <root1> [root2 ...]`
+  - Query: `tools/adm.exe --query <index_name> <request...>`
+  - Status: `tools/adm.exe --rag status <index_name>` and docs: `tools/adm.exe --rag docs <index_name> [limit]`
+  - Treat `.adid_rag/` as local-only runtime state. Do not commit staged models, sqlite stores, logs, or generated runtime payloads from that tree.
+  - **Default embedder:** local `sentence_transformers` + `BAAI/bge-m3` configured through `rag.embed.backend`, `rag.embed.model`, `rag.embed.device`, and `rag.embed.batch_size`.
+  - **Hybrid retrieval:** Queries use full-vector similarity + dual-quaternion signature shortlist/rerank + SQLite FTS5, fused via Reciprocal Rank Fusion (RRF). Tune via `rag.vector_top_k`, `rag.fts_top_k`, `rag.dq_top_k`, `rag.weight_vector`, `rag.weight_fts`, `rag.weight_dq`, `rag.rrf_k`, and the `rag.dq_*` settings.
+
+- **MCP server (RAG tools):**
+  - Stdio (spawned by a client): `tools/adm.exe --mcp`
+  - HTTP (service-friendly): `tools/adm.exe --mcp-http 127.0.0.1 7990` (endpoint: `POST /mcp`)
+  - Windows check (service): `sc.exe query ADID_ADM_MCP`
+  - Linux check (systemd): `systemctl status adid-adm-mcp.service --no-pager`
+
+- **Workspace lanes (do not mix):**
+  - `experiments/` - short-lived experiments and scratch code.
+  - `futures/` - planned work / drafts not ready for mainline.
+  - `obsolete/` - deprecated artifacts kept for reference only.
+  - `makeups/` - explicit stubs/makeups when something cannot be executed for real (must include a short note explaining what is stubbed and why).
+
+- **Non-mainline activity rule:** For changes that are *not* part of the main project development line (typically under `experiments/`, `futures/`, `obsolete/`, `makeups/`), prefer `--patch-tool` and standard shell commands instead of adding new declarative descriptors under `updates/`. Reason: keep the mainline update ledger clean and avoid cross-conflicts from throwaway work.
+
+- **Repository index (required):** Keep `index.md` at the repo root up to date. It must describe the repository contents *by folder* (purpose + key entrypoints) so information stays indexed.
+
+## Project Structure:
+
+- `./pyproject.toml`: Project file, which includes all dependencies; initialized via `uv sync` at start of session. `./README.md` - readme file which describes project. `./AGENTS.md`: Operational Rules for Agents. `./src/project_name/__init__.py`: Application|Server initialization sequence. `./src/project_name/__main__.py`: Application|Server run sequence. `./src/project_name/libs/`: Standard universal libraries. `./src/project_name/DB/`: Databases `./src/project_name/gui/`: Core Graphical user interface with gui related files. `./src/project_name/clients/`: Data end users (with gui and logic). place documentation in /docs folder, 
+
+## Project Planning (track progress)
+
+- **Use ISO8601 prefixes** for **one-time** / **historical** artifacts so we can sort and see what happened when: Plans: `plans/[ISO8601]_plan_description.md`. One-off scripts / experiments: `[ISO8601]_something.py`
+
+- **Create|Update: `_development_plan.md`**[TIMESTAMP], Goal which is reason of tasks/Tasks [COMPLETION] (A task is complete *only* if its related tests pass). Reason: Such development plan saves time to understand where development flow is going.
+  
+- **Absolute build order (no exceptions):**
+  1) Define goals + plan (minimal, testable).
+  2) Create/refresh project scaffold (folders/files/interfaces).
+  3) Create/update tests for the new scaffold and rules.
+  4) Delete orphans (processes, temp files, abandoned logs, stale tests/fixtures).
+  5) Implement application code to satisfy the tests and goals.
+
+- **Planning**: every plan must be splitted on subtasks as separate files and every such file **MUST** contain abstract definition - clear math formalization, structural diagram, clear input and output parameters, brief implementation, test cases.
+
+- **When plan accomplished place plan in plans_completed folder.
+  
+## Progress Logging
+   
+- **Create|Update: `_progress_log.md` **[TIMESTAMP], Reason for the activity, Script Name -  [TIMESTAMP]_[short_semantic_dominant][.sh .py, .js, .pas or any applicable], Script Output. Reason: Such log essential in bug tracking. 
+   
+- **Create|Update: `_application_workflow_diagram.md`:**. List of all modules and functions in order of their execution with:
+`Abstract logic for/if/else/goto statements`,`relative_path`,`short_semantic_dominant`,`Input and output parameters`. Reason: Such file allows to remember code purpose.
+      
+- **At end of every session estimate: `%` of `_application_workflow_diagram.md` code coverage vs actual codebase and report.**
+
+## 📐 Code Quality & Standards
+
+- General Style (PEP 8 & PEP 257): Follow PEP 8 (4-space indents, 79-100 char line length). Format/Lint: Use Black for formatting and flake8 or pylint for linting. Naming: snake_case for variables/functions, CamelCase for classes, ALL_CAPS for constants. Docstrings: Write `PEP 257` docstrings for all public modules, classes, and functions. Type Hints: Use `PEP 484` type hints for all function signatures.
+
+- Logic & Transparency: **Modular: Keep GUI code and logic separated to avoid spaghetti code.**. **Precision: Deliver code that is provably correct. Compile, lint, and test logic before output.**. **Provenance: Reference official docs, examples, or codebase inspection. Do not "guess" API usage.**. 
+- **Clarity on Uncertainty: Mark assumptions or unverified code clearly.** ASSUMPTION: ..., UNVERIFIED: ..., TODO (VERIFY): ...
+
+## Security & Configuration
+
+- No Hardcoded Secrets:Never commit secrets. Use OS keyring or an ignored local config file. Logging: Never log sensitive data (tokens, passwords, etc.). Least Privilege: Minimize permissions for any credentials used.
+
+- **Sensitive data handling (strict):**
+  - Do not request or encourage users to paste API keys/tokens/passwords into chat or into tracked files/commands.
+  - If a user provides a token anyway, treat it as sensitive: do not repeat it, do not write it to git-tracked files, and do not include it in shell commands or logs.
+  - **Environment variables are considered insecure for secrets** (leakage via child processes, crash dumps, diagnostic output, etc.); do not recommend them for tokens/keys.
+  - Use secure local storage + gitignore instead: OS keyring via `adm --keyring ...`, or a local-only `adm.json` that is not committed.
+
+## 📚 References
+
+- [PEP 8 – Style Guide for Python Code](https://peps.python.org/pep-0008/), [PEP 257 – Docstring, Conventions](https://peps.python.org/pep-0257/), [PEP 484 – Type Hints](https://peps.python.org/pep-0484/), [pytest documentation](https://docs.pytest.org/en/7.1.x/explanation/goodpractices.html), [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+

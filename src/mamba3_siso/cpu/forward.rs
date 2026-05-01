@@ -15,7 +15,7 @@ use super::flat::Mamba3LayerFlat;
 use super::scratch::Mamba3Scratch;
 use super::weights::TrainMamba3LayerWeights;
 use crate::ops::blas::sgemm_forward;
-use crate::ops::fast_math::{RMS_NORM_EPS, fast_exp_scalar, fast_tanh};
+use crate::ops::fast_math::{fast_exp_scalar, fast_tanh, RMS_NORM_EPS};
 
 // Stack-array limits (must match config validation)
 const MAX_DS: usize = 64;
@@ -449,6 +449,8 @@ mod tests {
             rope_fraction: 0.5,
             a_floor: 0.0625,
             is_outproj_norm: false,
+            use_wavelet: true,
+            wavelet_levels: 0,
         }
     }
 

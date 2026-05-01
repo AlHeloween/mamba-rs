@@ -17,6 +17,6 @@ pub mod weights;
 
 pub use dims::Mamba3Dims;
 pub use flat::{Mamba3FieldOffsets, Mamba3LayerFlat};
-pub use inference::{Mamba3StepScratch, mamba3_layer_step, mamba3_step};
+pub use inference::{mamba3_layer_step, mamba3_step, Mamba3StepScratch};
 pub use scratch::Mamba3Scratch;
 pub use weights::{TrainMamba3LayerWeights, TrainMamba3Weights};

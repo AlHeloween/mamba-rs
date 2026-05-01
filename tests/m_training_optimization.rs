@@ -212,6 +212,8 @@ fn run_benchmark(
         expand: 2,
         n_layers: 1,
         scan_mode: Default::default(),
+        use_wavelet: true,
+        wavelet_levels: 0,
     };
     let n_train_seq = train_inputs.len() / (SEQ_LEN * input_dim);
     let total_steps = EPOCHS * n_train_seq;

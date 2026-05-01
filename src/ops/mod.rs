@@ -4,5 +4,6 @@ pub mod blas;
 pub mod dims;
 pub mod fast_math;
 pub mod norms;
+pub mod wavelet;
 
 pub use dims::{MambaDims, MambaRecurrentState};

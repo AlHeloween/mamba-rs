@@ -23,6 +23,10 @@ pub struct Mamba3Config {
     pub a_floor: f32,
     /// Enable RMSNormGated before out_proj (default: false per reference).
     pub is_outproj_norm: bool,
+    /// Use Haar wavelet input decomposition. Default: true.
+    pub use_wavelet: bool,
+    /// Number of wavelet decomposition levels. 0 = auto (= min(6, log2(seq_len))).
+    pub wavelet_levels: usize,
 }
 
 impl Mamba3Config {
@@ -110,6 +114,8 @@ impl Default for Mamba3Config {
             rope_fraction: 0.5,
             a_floor: 0.0625,
             is_outproj_norm: false,
+            use_wavelet: true,
+            wavelet_levels: 0,
         }
     }
 }

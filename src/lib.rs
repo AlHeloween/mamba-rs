@@ -30,6 +30,9 @@ pub mod serialize;
 pub mod state;
 pub mod weights;
 
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
 // Re-export old paths for backward compatibility during transition.
 // These will be removed once all external users migrate.
 pub mod inference {
@@ -61,9 +64,10 @@ pub mod gpu {
 
 pub use config::MambaConfig;
 pub use mamba_ssm::cpu::inference::{
-    MambaLayerScratch, MambaStepScratch, mamba_block_step, mamba_layer_step, mamba_step,
+    mamba_block_step, mamba_layer_step, mamba_step, MambaLayerScratch, MambaStepScratch,
 };
 pub use module::{Mamba3Backbone, MambaBackbone};
+pub use ops::wavelet;
 pub use schedule::{ConstantLR, LRSchedule, LinearWarmup, StepDecay, WarmupCosine, WarmupLinear};
 pub use state::{MambaLayerState, MambaState};
 pub use weights::{MambaLayerWeights, MambaWeights};

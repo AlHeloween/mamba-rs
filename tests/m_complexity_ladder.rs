@@ -332,6 +332,8 @@ fn test_synthetic_complexity_ladder() {
         expand: 2,
         n_layers: 1,
         scan_mode: Default::default(),
+        use_wavelet: true,
+        wavelet_levels: 0,
     };
 
     println!("\n=== Synthetic Complexity Ladder ===");

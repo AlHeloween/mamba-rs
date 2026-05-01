@@ -14,10 +14,10 @@
 
 use super::kernels::Mamba3Kernels;
 use super::weights::GpuMamba3WeightsInf;
-use crate::mamba_ssm::gpu::buffers::GpuBuffer;
-use crate::mamba_ssm::gpu::device::GpuDevice;
 use crate::mamba3_siso::config::Mamba3Config;
 use crate::mamba3_siso::weights::Mamba3Weights;
+use crate::mamba_ssm::gpu::buffers::GpuBuffer;
+use crate::mamba_ssm::gpu::device::GpuDevice;
 use std::ffi::c_int;
 use std::sync::Arc;
 

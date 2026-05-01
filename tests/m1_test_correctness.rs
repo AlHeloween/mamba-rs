@@ -1534,6 +1534,8 @@ fn test_custom_config_small() {
         expand: 2,
         n_layers: 2,
         scan_mode: mamba_rs::config::ScanMode::Sequential,
+        use_wavelet: true,
+        wavelet_levels: 0,
     };
     let input_dim = 32;
     let bb = MambaBackbone::init(cfg, input_dim, 99);
@@ -1576,6 +1578,8 @@ fn test_custom_config_large() {
         expand: 2,
         n_layers: 4,
         scan_mode: mamba_rs::config::ScanMode::Sequential,
+        use_wavelet: true,
+        wavelet_levels: 0,
     };
     let input_dim = 256;
     let bb = MambaBackbone::init(cfg, input_dim, 77);
@@ -1997,6 +2001,8 @@ mod gpu_extra_tests {
             expand: 2,
             n_layers: 2,
             scan_mode: mamba_rs::config::ScanMode::Sequential,
+            use_wavelet: true,
+            wavelet_levels: 0,
         };
         let input_dim = 32;
         let bb = MambaBackbone::init(cfg, input_dim, 99);

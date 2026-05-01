@@ -298,6 +298,8 @@ fn test_pointwise_csv_output() {
         expand: 2,
         n_layers: 2,
         scan_mode: Default::default(),
+        use_wavelet: true,
+        wavelet_levels: 0,
     };
 
     eprintln!("Training model...");

@@ -403,6 +403,8 @@ fn test_ode_function_approximation() {
         expand: 2,
         n_layers: 2,
         scan_mode: Default::default(),
+        use_wavelet: true,
+        wavelet_levels: 0,
     };
 
     println!("\n=== ODE State → Function Approximation ===");

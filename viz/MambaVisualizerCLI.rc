@@ -1,0 +1,28 @@
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904E4"
+    BEGIN
+      VALUE "CompanyName", "mamba-rs"
+      VALUE "FileDescription", "Mamba Visualizer CLI"
+      VALUE "FileVersion", "1.0.0.0"
+      VALUE "InternalName", "MambaVisualizerCLI"
+      VALUE "LegalCopyright", "Copyright (c) 2025"
+      VALUE "OriginalFilename", "MambaVisualizerCLI.exe"
+      VALUE "ProductName", "Mamba Visualizer CLI"
+      VALUE "ProductVersion", "1.0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1252
+  END
+END
